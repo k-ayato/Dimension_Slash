@@ -1,5 +1,12 @@
 import { CardLoader } from '../utils/CardLoader.js';
 
+// 各タイプのパッシブ説明（UI表示用）
+export const TYPE_PASSIVES = {
+  delta: { label: '◆ATKダウン無効',        color: '#e63946', desc: '◆[Passive] 受けるATKダウン効果を無効化する' },
+  sigma: { label: '◆融合→D0召喚',          color: '#4895ef', desc: '◆[Passive] 融合召喚時、空き枠があれば0Dを追加生成する' },
+  omega: { label: (dim) => `◆攻撃ATK-${dim}`, color: '#4cc9a4', desc: (dim) => `◆[Passive] 攻撃時、相手のATKを-${dim}する` },
+};
+
 export class EffectHandler {
   constructor(gameState) {
     this.gameState = gameState;
@@ -52,6 +59,7 @@ export class EffectHandler {
     if (gameState.field.hasEmptyBattleSlot(owner)) {
       const zero = CardLoader.createCardInstance('0d');
       gameState.field.addToBattle(owner, zero);
+      this.onSummon(zero, owner, gameState);
       events.push({ type: 'additionalSummon', card: zero, owner });
     }
 
@@ -71,12 +79,23 @@ export class EffectHandler {
   }
 
   onSummon(inst, owner, gameState) {
-    if (inst.effect_id !== 'omega_3d_def_boost') return;
     const cards = gameState.field.getFilledSlots(owner);
-    for (const card of cards) {
-      if (card.instanceId !== inst.instanceId) {
-        card.currentDef += 2;
+
+    // Omega 3D召喚時: 既存の全味方カードにDEF+2
+    if (inst.effect_id === 'omega_3d_def_boost') {
+      for (const card of cards) {
+        if (card.instanceId !== inst.instanceId) {
+          card.currentDef += 2;
+        }
       }
+    }
+
+    // 新規カード召喚時: フィールドに既存Omega 3DがいればそのカードにもDEF+2
+    const existingOmega3d = cards.find(
+      c => c.effect_id === 'omega_3d_def_boost' && c.instanceId !== inst.instanceId
+    );
+    if (existingOmega3d) {
+      inst.currentDef += 2;
     }
   }
 
@@ -86,5 +105,26 @@ export class EffectHandler {
 
   isDoubleAttacker(inst) {
     return inst.effect_id === 'sigma_1d_double_attack';
+  }
+
+  // Omega D1/D2/D3: 攻撃時に相手カードのATKをdimension分下げる
+  // Delta passive: ATKダウン免疫
+  onOmegaAtkDebuff(attacker, defender) {
+    if (!attacker || !defender) return 0;
+    if (attacker.type !== 'omega' || attacker.dimension >= 4) return 0;
+    if (defender.type === 'delta') return 0; // Delta passive: ATKダウン無効
+    const debuff = attacker.dimension;
+    defender.currentAtk = Math.max(0, defender.currentAtk - debuff);
+    return debuff;
+  }
+
+  // Sigma passive: 融合召喚時に空き枠があれば0Dを追加生成
+  onFusionSummon(newCard, owner, gameState) {
+    if (newCard.type !== 'sigma' || newCard.dimension >= 4) return null;
+    if (!gameState.field.hasEmptyBattleSlot(owner)) return null;
+    const zero = CardLoader.createCardInstance('0d');
+    gameState.field.addToBattle(owner, zero);
+    this.onSummon(zero, owner, gameState);
+    return zero;
   }
 }

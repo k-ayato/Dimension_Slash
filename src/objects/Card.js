@@ -4,6 +4,13 @@ const TYPE_COLORS = {
   omega: 0x4cc9a4,
   null:  0x888888,
 };
+
+// タイプ別パッシブバッジ（カード上の小ラベル）
+const PASSIVE_BADGE = {
+  delta: { label: '◆ATKダウン無効',      color: '#e63946' },
+  sigma: { label: '◆融合→D0召喚',        color: '#4895ef' },
+  omega: { label: (dim) => `◆攻撃ATK-${dim}`, color: '#4cc9a4' },
+};
 const TYPE_SYMBOLS = {
   delta: 'δ',
   sigma: 'σ',
@@ -87,6 +94,19 @@ export class Card extends Phaser.GameObjects.Container {
     // カード名・次元数はカード上には描画しない（ホバーツールチップで表示）
 
     if (!is4D && !isZeroD) {
+      // パッシブバッジ（ステータスエリア直上の薄暗ストリップ）
+      if (inst.type && PASSIVE_BADGE[inst.type]) {
+        const badge = PASSIVE_BADGE[inst.type];
+        const passiveLabel = typeof badge.label === 'function' ? badge.label(inst.dimension) : badge.label;
+        const passBg = this.scene.add.graphics();
+        passBg.fillStyle(0x000000, 0.72);
+        passBg.fillRect(-CARD_W / 2, CARD_H / 2 - 64, CARD_W, 12);
+        this.add(passBg);
+        const pStyle = { fontSize: '7px', fill: badge.color, fontFamily: 'monospace', fontStyle: 'bold' };
+        this._passiveBadge = this.scene.add.text(0, CARD_H / 2 - 63, passiveLabel, pStyle).setOrigin(0.5, 0);
+        this.add(this._passiveBadge);
+      }
+
       // D1〜D3: ATK / DEF / HP を下部暗幕上に表示
       const statStyle = { fontSize: '9px', fill: '#ccddee', fontFamily: 'monospace' };
       this._atkText = this.scene.add.text(-CARD_W / 2 + 3, CARD_H / 2 - 48, `ATK:${inst.currentAtk}`, statStyle).setOrigin(0, 0);
@@ -144,8 +164,28 @@ export class Card extends Phaser.GameObjects.Container {
 
   updateDisplay() {
     const inst = this._inst;
-    if (this._atkText) this._atkText.setText(`ATK:${inst.currentAtk}`);
-    if (this._defText) this._defText.setText(`DEF:${inst.currentDef}`);
+    if (this._atkText) {
+      const atkDelta = (inst.currentAtk ?? 0) - (inst.baseAtk ?? 0);
+      if (atkDelta !== 0) {
+        const sign = atkDelta > 0 ? '+' : '';
+        this._atkText.setText(`ATK:${inst.currentAtk}(${sign}${atkDelta})`);
+        this._atkText.setStyle({ fill: atkDelta > 0 ? '#ffaa44' : '#88aaff' });
+      } else {
+        this._atkText.setText(`ATK:${inst.currentAtk}`);
+        this._atkText.setStyle({ fill: '#ccddee' });
+      }
+    }
+    if (this._defText) {
+      const defDelta = (inst.currentDef ?? 0) - (inst.baseDef ?? 0);
+      if (defDelta !== 0) {
+        const sign = defDelta > 0 ? '+' : '';
+        this._defText.setText(`DEF:${inst.currentDef}(${sign}${defDelta})`);
+        this._defText.setStyle({ fill: defDelta > 0 ? '#44ddaa' : '#ff9999' });
+      } else {
+        this._defText.setText(`DEF:${inst.currentDef}`);
+        this._defText.setStyle({ fill: '#ccddee' });
+      }
+    }
     if (this._hpText)  this._hpText.setText(`HP:${inst.currentHp}/${inst.maxHp}`);
     if (this._hpBar) this._drawHpBar();
     if (this._attacked) {
@@ -182,15 +222,51 @@ export class Card extends Phaser.GameObjects.Container {
   }
 
   playSpawnAnim() {
-    this.setScale(0);
+    this.setScale(0.2);
     this.setAlpha(0);
+    this.setRotation(-0.12);
     this.scene.tweens.add({
       targets: this,
       scaleX: 1, scaleY: 1,
       alpha: 1,
-      duration: 300,
+      rotation: 0,
+      duration: 320,
       ease: 'Back.easeOut',
     });
+    // 衝撃波リング
+    const g = this.scene.add.graphics().setDepth(50);
+    const col = this._inst.dimension >= 4 ? 0xffd700 : 0xffffff;
+    g.lineStyle(2.5, col, 0.85);
+    g.strokeCircle(this.x, this.y, 28);
+    this.scene.tweens.add({
+      targets: g, scaleX: 3.5, scaleY: 3.5, alpha: 0,
+      duration: 450, ease: 'Power2',
+      onComplete: () => g.destroy(),
+    });
+  }
+
+  playD4SpawnAnim() {
+    this.setScale(0);
+    this.setAlpha(0);
+    this.scene.tweens.chain({
+      targets: this,
+      tweens: [
+        { scaleX: 1.35, scaleY: 1.35, alpha: 1, duration: 500, ease: 'Back.easeOut' },
+        { scaleX: 1, scaleY: 1, duration: 250, ease: 'Power2' },
+      ],
+    });
+    // 二重ゴールドリング
+    for (let r = 0, i = 0; i < 2; i++, r += 28) {
+      const g = this.scene.add.graphics().setDepth(50);
+      g.lineStyle(3 - i, 0xffd700, 0.9 - i * 0.2);
+      g.strokeCircle(this.x, this.y, 35 + r);
+      this.scene.tweens.add({
+        targets: g, scaleX: 4, scaleY: 4, alpha: 0,
+        delay: i * 80,
+        duration: 700 + i * 100, ease: 'Power2',
+        onComplete: () => g.destroy(),
+      });
+    }
   }
 
   playAttackAnim(tx, ty, callback) {
@@ -223,14 +299,24 @@ export class Card extends Phaser.GameObjects.Container {
   }
 
   playFusionAnim(callback) {
+    // 吸い込み前の白フラッシュ
+    const glow = this.scene.add.graphics().setDepth(60);
+    glow.fillStyle(0xffffff, 0.6);
+    glow.fillCircle(this.x, this.y, 36);
+    this.scene.tweens.add({
+      targets: glow, alpha: 0, scaleX: 0.1, scaleY: 0.1,
+      duration: 200, ease: 'Power2',
+      onComplete: () => glow.destroy(),
+    });
     this.scene.tweens.add({
       targets: this,
-      scaleX: 0,
-      scaleY: 0,
+      scaleX: 0, scaleY: 0,
       alpha: 0,
-      rotation: Math.PI,
-      duration: 400,
-      ease: 'Power2',
+      rotation: Math.PI * 1.5,
+      x: this.x,
+      y: this.y - 10,
+      duration: 450,
+      ease: 'Power3.easeIn',
       onComplete: () => {
         this.destroy();
         if (callback) callback();

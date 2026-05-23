@@ -42,7 +42,7 @@
       "def": 3,
       "hp": 4,
       "effect_id": "omega_1d_regen",
-      "effect_desc": "ターン終了時、HP1回復"
+      "effect_desc": "ターン終了時HP1回復。攻撃時、相手カードのATKを-1する"
     },
     {
       "id": "delta_2d",
@@ -75,7 +75,7 @@
       "def": 5,
       "hp": 6,
       "effect_id": "omega_2d_pierce_block",
-      "effect_desc": "撃破される時、プレイヤーHPへの貫通ダメージを無効化"
+      "effect_desc": "撃破される時、貫通ダメージを無効化。攻撃時、相手カードのATKを-2する"
     },
     {
       "id": "delta_3d",
@@ -108,7 +108,7 @@
       "def": 8,
       "hp": 9,
       "effect_id": "omega_3d_def_boost",
-      "effect_desc": "自分フィールド全体のカードのDEFを+2する"
+      "effect_desc": "召喚時、自軍全体DEF+2。攻撃時、相手カードのATKを-3する"
     },
     {
       "id": "delta_4d",

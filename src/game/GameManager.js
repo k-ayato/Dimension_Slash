@@ -6,6 +6,13 @@ import { Fusion } from './Fusion.js';
 import { AI } from './AI.js';
 
 export class GameManager {
+  // 先行1T:1体 → 後攻1T:2体 → 先行2T:2体 → 以降3体
+  static calcMaxSummons(turn, currentPlayer) {
+    if (turn === 1 && currentPlayer === 'player') return 1;
+    if (turn === 1 && currentPlayer === 'ai')     return 2;
+    if (turn === 2 && currentPlayer === 'player') return 2;
+    return 3;
+  }
   constructor() {
     this._listeners = {};
     this.state = null;
@@ -25,19 +32,19 @@ export class GameManager {
       turn: 1,
       currentPlayer: 'player',
       player: {
-        hp: 20,
+        hp: 30,
         hand: [],
         deck: playerDeck,
-        hasNormalSummoned: false,
+        normalSummonCount: 0,
         totalDamageDealt: 0,
         cardsSummoned: 0,
         fusionCount: 0,
       },
       ai: {
-        hp: 20,
+        hp: 30,
         hand: [],
         deck: aiDeck,
-        hasNormalSummoned: false,
+        normalSummonCount: 0,
         totalDamageDealt: 0,
         cardsSummoned: 0,
         fusionCount: 0,
@@ -88,8 +95,9 @@ export class GameManager {
 
   normalSummon(owner) {
     const ownerState = this.state[owner];
-    if (ownerState.hasNormalSummoned) {
-      return { ok: false, reason: 'このターンはすでに通常召喚済みです' };
+    const maxSummons = GameManager.calcMaxSummons(this.state.turn, owner);
+    if (ownerState.normalSummonCount >= maxSummons) {
+      return { ok: false, reason: `このターンの召喚上限です（${maxSummons}体）` };
     }
     if (!this.state.field.hasEmptyBattleSlot(owner)) {
       return { ok: false, reason: 'フィールドが満員です（最大5体）' };
@@ -97,15 +105,16 @@ export class GameManager {
 
     const zero = CardLoader.createCardInstance('0d');
     this.state.field.addToBattle(owner, zero);
-    ownerState.hasNormalSummoned = true;
+    ownerState.normalSummonCount++;
     ownerState.cardsSummoned++;
+    this.effectHandler.onSummon(zero, owner, this.state);
 
     this._emit('cardSummoned', { owner, card: zero, isAdditional: false });
     this._emit('stateChanged', this.state);
     return { ok: true };
   }
 
-  fuse(owner, instAId, instBId, handCardInstanceId) {
+  fuse(owner, instAId, instBId, handCardInstanceId, instCId = null) {
     const ownerState = this.state[owner];
     const handIdx = ownerState.hand.findIndex(c => c.instanceId === handCardInstanceId);
     if (handIdx === -1) return { ok: false, reason: '手札にカードが見つかりません' };
@@ -114,13 +123,14 @@ export class GameManager {
     const fieldCards = this.state.field.getFilledSlots(owner);
     const instA = fieldCards.find(c => c.instanceId === instAId);
     const instB = fieldCards.find(c => c.instanceId === instBId);
+    const instC = instCId ? fieldCards.find(c => c.instanceId === instCId) : null;
 
-    const check = this.fusion.canFuse(instA, instB, handCard);
+    const check = this.fusion.canFuse(instA, instB, handCard, instC);
     if (!check.ok) return check;
 
     ownerState.hand.splice(handIdx, 1);
 
-    const result = this.fusion.execute(owner, instA, instB, handCard, this.state);
+    const result = this.fusion.execute(owner, instA, instB, handCard, this.state, instC);
 
     this._emit('fusionSuccess', {
       owner,
@@ -128,11 +138,19 @@ export class GameManager {
       isSpecial: result.isSpecial,
       consumedA: instA,
       consumedB: instB,
-      destroyedSpecial: result.destroyedCard || null,  // 既存4Dカードが破壊された場合
+      consumedC: instC || null,
+      destroyedSpecial: result.destroyedCard || null,
     });
     if (result.isSpecial) {
       this._emit('fieldEffectActivated', { owner, effectId: result.newCard.effect_id });
     }
+
+    // Sigma passive: 融合召喚時に0D追加生成
+    const sigmaD0 = this.effectHandler.onFusionSummon(result.newCard, owner, this.state);
+    if (sigmaD0) {
+      this._emit('cardSummoned', { owner, card: sigmaD0, isAdditional: true });
+    }
+
     this._emit('stateChanged', this.state);
     return { ok: true, result };
   }
@@ -196,6 +214,12 @@ export class GameManager {
     if (attacker.attackCount >= maxAttacks) attacker.hasAttacked = true;
     this.state[owner].totalDamageDealt += result.damage;
 
+    // Omega ATKデバフ（撃破されていない場合のみ適用）
+    if (!result.defenderDied) {
+      const debuff = this.effectHandler.onOmegaAtkDebuff(attacker, defender);
+      if (debuff > 0) result.atkDebuff = { target: defender, amount: debuff };
+    }
+
     const afterEffects = this.effectHandler.onAfterAttack(attacker, owner, this.state);
     if (afterEffects) {
       for (const ev of afterEffects) {
@@ -231,7 +255,7 @@ export class GameManager {
       this._emit('stateChanged', this.state);
     }
 
-    this.state[owner].hasNormalSummoned = false;
+    this.state[owner].normalSummonCount = 0;
     const cards = this.state.field.getFilledSlots(owner);
     for (const c of cards) {
       c.hasAttacked = false;
@@ -263,16 +287,28 @@ export class GameManager {
 
     await this._delay(scene, 600);
 
-    const mainActions = AI.planMainPhase(this.state, this.state.field, this.effectHandler);
-    for (const action of mainActions) {
-      if (action.type === 'normalSummon') {
-        this.normalSummon(owner);
-        await this._delay(scene, 400);
-      } else if (action.type === 'fuse') {
-        const handIdx = this.state.ai.hand.findIndex(c => c.instanceId === action.handCardInstanceId);
-        if (handIdx !== -1) {
-          this.fuse(owner, action.instAId, action.instBId, action.handCardInstanceId);
-          await this._delay(scene, 600);
+    // メインフェーズ: 行動がなくなるまで「計画→実行」を繰り返す（連続融合対応）
+    for (let iter = 0; iter < 20; iter++) {
+      const maxSummons = GameManager.calcMaxSummons(this.state.turn, 'ai');
+      const mainActions = AI.planMainPhase(this.state, this.state.field, this.effectHandler, maxSummons);
+      if (mainActions.length === 0) break;
+
+      for (const action of mainActions) {
+        if (action.type === 'normalSummon') {
+          this.normalSummon(owner);
+          await this._delay(scene, 400);
+        } else if (action.type === 'fuse') {
+          const handIdx = this.state.ai.hand.findIndex(c => c.instanceId === action.handCardInstanceId);
+          if (handIdx !== -1) {
+            this.fuse(owner, action.instAId, action.instBId, action.handCardInstanceId);
+            await this._delay(scene, 600);
+          }
+        } else if (action.type === 'fuse3') {
+          const handIdx = this.state.ai.hand.findIndex(c => c.instanceId === action.handCardInstanceId);
+          if (handIdx !== -1) {
+            this.fuse(owner, action.instAId, action.instBId, action.handCardInstanceId, action.instCId);
+            await this._delay(scene, 600);
+          }
         }
       }
     }
@@ -280,7 +316,7 @@ export class GameManager {
     this.startAttackPhase();
     await this._delay(scene, 400);
 
-    const attackActions = AI.planAttackPhase(this.state, this.state.field);
+    const attackActions = AI.planAttackPhase(this.state, this.state.field, this.effectHandler);
     for (const act of attackActions) {
       const attacker = this.state.field.getFilledSlots(owner).find(c => c.instanceId === act.attackerInstanceId);
       if (!attacker) continue;
