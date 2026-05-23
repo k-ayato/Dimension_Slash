@@ -30,15 +30,17 @@ export class Fusion {
     const isSpecial = newInst.dimension === 4;
 
     if (isSpecial) {
+      // 共有スロットに既存4Dカードがあれば破壊して置き換える
+      const destroyedCard = this.field.getSpecialCard() || null;
       this.field.setSpecial(owner, newInst);
       gameState[owner].fusionCount++;
       this.effectHandler.onFieldEffectActivate(newInst.effect_id, owner);
+      return { newCard: newInst, isSpecial, destroyedCard };
     } else {
       this.field.addToBattle(owner, newInst);
       gameState[owner].fusionCount++;
       this.effectHandler.onSummon(newInst, owner, gameState);
+      return { newCard: newInst, isSpecial, destroyedCard: null };
     }
-
-    return { newCard: newInst, isSpecial };
   }
 }

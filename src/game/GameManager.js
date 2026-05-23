@@ -128,6 +128,7 @@ export class GameManager {
       isSpecial: result.isSpecial,
       consumedA: instA,
       consumedB: instB,
+      destroyedSpecial: result.destroyedCard || null,  // 既存4Dカードが破壊された場合
     });
     if (result.isSpecial) {
       this._emit('fieldEffectActivated', { owner, effectId: result.newCard.effect_id });
@@ -160,7 +161,9 @@ export class GameManager {
     }
 
     if (isDirectAttack || !defenderInstId) {
-      const dmg = attacker.currentAtk;
+      let dmg = attacker.currentAtk;
+      if (this.state.field.getActiveFieldEffect(owner) === 'field_delta') dmg += 2;
+      if (this.state.field.getActiveFieldEffect(defenderOwner) === 'field_delta') dmg += 2;
       const fieldOmega = this.state.field.getActiveFieldEffect(defenderOwner) === 'field_omega';
       const finalDmg = Math.floor(fieldOmega ? dmg * 0.5 : dmg);
       this.combat.applyPlayerDamage(defenderOwner, finalDmg, this.state);

@@ -19,15 +19,19 @@ const DIM_COLORS = {
 
 // カードid → テクスチャキー (delta=Red, sigma=Blue, omega=Green)
 const CARD_IMG_KEYS = {
-  delta_1d: 'card_delta_1d',
-  sigma_1d:  'card_sigma_1d',
-  omega_1d:  'card_omega_1d',
-  delta_2d: 'card_delta_2d',
-  sigma_2d:  'card_sigma_2d',
-  omega_2d:  'card_omega_2d',
-  delta_3d: 'card_delta_3d',
-  sigma_3d:  'card_sigma_3d',
-  omega_3d:  'card_omega_3d',
+  '0d':       'card_0d',
+  delta_1d:   'card_delta_1d',
+  sigma_1d:   'card_sigma_1d',
+  omega_1d:   'card_omega_1d',
+  delta_2d:   'card_delta_2d',
+  sigma_2d:   'card_sigma_2d',
+  omega_2d:   'card_omega_2d',
+  delta_3d:   'card_delta_3d',
+  sigma_3d:   'card_sigma_3d',
+  omega_3d:   'card_omega_3d',
+  delta_4d:   'card_delta_4d',
+  sigma_4d:   'card_sigma_4d',
+  omega_4d:   'card_omega_4d',
 };
 
 const CARD_W = 82;
@@ -46,53 +50,44 @@ export class Card extends Phaser.GameObjects.Container {
   _build() {
     const inst = this._inst;
     const typeColor = TYPE_COLORS[inst.type] ?? TYPE_COLORS.null;
-    const is4D = inst.dimension === 4;
-    const imgKey = CARD_IMG_KEYS[inst.id];
+    const is4D    = inst.dimension === 4;
+    const isZeroD = inst.dimension === 0;
+    const imgKey  = CARD_IMG_KEYS[inst.id];
     const hasImage = !!(imgKey && this.scene.textures.exists(imgKey));
     this._hasImage = hasImage;
 
     if (hasImage) {
-      // カード画像を背景として表示
       this._cardImg = this.scene.add.image(0, 0, imgKey).setDisplaySize(CARD_W, CARD_H);
       this.add(this._cardImg);
 
-      // テキスト可読性のための半透明暗幕（上部: 名前用、下部: ステータス用）
-      const overlay = this.scene.add.graphics();
-      overlay.fillStyle(0x000000, 0.58);
-      overlay.fillRect(-CARD_W / 2, -CARD_H / 2,      CARD_W, 18);  // top
-      overlay.fillRect(-CARD_W / 2,  CARD_H / 2 - 52, CARD_W, 52);  // bottom
-      this.add(overlay);
+      // D1〜D3のみ下部暗幕（D0・D4はテキスト不要）
+      if (!isZeroD && !is4D) {
+        const overlay = this.scene.add.graphics();
+        overlay.fillStyle(0x000000, 0.58);
+        overlay.fillRect(-CARD_W / 2, CARD_H / 2 - 52, CARD_W, 52);
+        this.add(overlay);
+      }
 
-      // タイプカラーのボーダー
       this._bg = this.scene.add.graphics();
       this._drawBorder(typeColor, is4D, false);
       this.add(this._bg);
     } else {
-      // 画像なし → プログラム描画カード
       this._bg = this.scene.add.graphics();
       this._drawBg(typeColor, is4D, false);
       this.add(this._bg);
     }
 
-    // カード名（上部）
-    const nameStyle = { fontSize: '9px', fill: '#ffffff', fontFamily: 'monospace', wordWrap: { width: CARD_W - 8 } };
-    this._nameText = this.scene.add.text(0, -CARD_H / 2 + 3, inst.name, nameStyle).setOrigin(0.5, 0);
-    this.add(this._nameText);
-
-    // 次元ラベル（左上）
-    const dimStyle = { fontSize: '9px', fontFamily: 'monospace', fontStyle: 'bold' };
-    this._dimText = this.scene.add.text(-CARD_W / 2 + 3, -CARD_H / 2 + 3, inst.dimension + 'D', dimStyle).setOrigin(0, 0);
-    this._dimText.setColor('#' + DIM_COLORS[inst.dimension].toString(16).padStart(6, '0'));
-    this.add(this._dimText);
-
-    // タイプシンボル（右上）
+    // タイプシンボル（右上）— D0はタイプなし(null)のためスキップ
     if (inst.type) {
       const symStyle = { fontSize: '11px', fill: '#ffffff', fontFamily: 'monospace', fontStyle: 'bold' };
       this._typeSymbol = this.scene.add.text(CARD_W / 2 - 3, -CARD_H / 2 + 3, TYPE_SYMBOLS[inst.type], symStyle).setOrigin(1, 0);
       this.add(this._typeSymbol);
     }
 
-    if (!is4D) {
+    // カード名・次元数はカード上には描画しない（ホバーツールチップで表示）
+
+    if (!is4D && !isZeroD) {
+      // D1〜D3: ATK / DEF / HP を下部暗幕上に表示
       const statStyle = { fontSize: '9px', fill: '#ccddee', fontFamily: 'monospace' };
       this._atkText = this.scene.add.text(-CARD_W / 2 + 3, CARD_H / 2 - 48, `ATK:${inst.currentAtk}`, statStyle).setOrigin(0, 0);
       this._defText = this.scene.add.text(-CARD_W / 2 + 3, CARD_H / 2 - 36, `DEF:${inst.currentDef}`, statStyle).setOrigin(0, 0);
@@ -102,15 +97,8 @@ export class Card extends Phaser.GameObjects.Container {
       this._hpBar = this.scene.add.graphics();
       this._drawHpBar();
       this.add(this._hpBar);
-    } else {
-      const effectStyle = {
-        fontSize: '8px', fill: '#ffd700', fontFamily: 'monospace',
-        wordWrap: { width: CARD_W - 8 }, align: 'center',
-      };
-      const label = inst.effect_desc ? inst.effect_desc.replace('フィールド効果：', '') : 'FIELD EFFECT';
-      this._effectText = this.scene.add.text(0, 10, label, effectStyle).setOrigin(0.5, 0.5);
-      this.add(this._effectText);
     }
+    // D4・D0: テキスト不要（ツールチップに表示）
 
     this._glow = this.scene.add.graphics();
     this.add(this._glow);
@@ -159,7 +147,7 @@ export class Card extends Phaser.GameObjects.Container {
     if (this._atkText) this._atkText.setText(`ATK:${inst.currentAtk}`);
     if (this._defText) this._defText.setText(`DEF:${inst.currentDef}`);
     if (this._hpText)  this._hpText.setText(`HP:${inst.currentHp}/${inst.maxHp}`);
-    this._drawHpBar();
+    if (this._hpBar) this._drawHpBar();
     if (this._attacked) {
       const typeColor = TYPE_COLORS[inst.type] ?? TYPE_COLORS.null;
       if (this._hasImage) {

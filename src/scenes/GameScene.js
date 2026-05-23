@@ -6,23 +6,29 @@ const H = 720;
 const CARD_W = Card.CARD_W;
 const CARD_H = Card.CARD_H;
 
-// フィールドY座標
-const AI_SPECIAL_Y    = 78;
-const AI_BATTLE_Y     = 185;
-const LOG_Y           = 355;
-const PLAYER_BATTLE_Y = 455;
-const PLAYER_SPECIAL_Y= 555;
-const HAND_Y          = 638;
+// ── フィールドY座標 (H=720) ──
+// gap=2px, top_margin=3px → 3 + 183 + 2 + 200 + 2 + 183 = 573 = hand_top(650-77)
+const AI_BATTLE_Y      = 95;    // AIバトルフィールド中心（高さ183px: 3-186）
+const SHARED_SPECIAL_Y = 288;   // 共有特別フィールド中心（高さ200px: 188-388）
+const PLAYER_BATTLE_Y  = 482;   // プレイヤーバトルフィールド中心（高さ183px: 390-573）
+const HAND_Y           = 650;   // 手札エリア中心（高さ154px: 573-727、HP barはscreen内）
+const HAND_SCALE       = 1.3;   // 手札カードを少し大きく表示
 
-// 右サイドボタン (x=1160 は手札最大幅680px の右端1021px から 39px 離れた場所)
-const BTN_X          = 1160;
-const BTN_SUMMON_Y   = 557;
-const BTN_PHASE_Y    = 622;
-const BTN_END_Y      = 688;
+// 右サイドボタン（攻撃フェーズ・ターン終了）
+const BTN_X       = 1160;
+const BTN_PHASE_Y = 565;
+const BTN_END_Y   = 660;
+
+// 右中央: 0D召喚（energyZone画像）
+const EZ_X = 1168;
+const EZ_Y = 310;
+const EZ_W = 210;
+const EZ_H = 299; // 210 × 337/237 ≈ 299
 
 // 対戦フィールド5スロットのX中心
-const SLOT_GAP = 96;
-const FIELD_X_START = W / 2 - SLOT_GAP * 2;
+// yourField.png(727x240)スロット境界から逆算: 中心 ≈ x=99,226,356,488,620 → 画面上376,503,633,765,897
+const SLOT_GAP = 130;
+const FIELD_X_START = W / 2 - SLOT_GAP * 2 - 4;  // = 376
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -37,9 +43,14 @@ export class GameScene extends Phaser.Scene {
     this.load.image('enemyFieldImg', 'assets/material/enemyField.png');
     this.load.image('battleBtnImg',  'assets/material/battleButton.png');
     this.load.image('endTurnBtnImg', 'assets/material/turnEndButton.png');
-    this.load.image('specialFldImg', 'assets/material/energyZone.png');
+    this.load.image('specialFldImg', 'assets/material/specialField_transparent.png');
 
-    // カード画像 (delta=Red, sigma=Blue, omega=Green)
+    // D0カード（タイプなし・共通1枚）
+    this.load.image('card_0d', 'assets/material/D0.png');
+
+    this.load.image('energyZoneImg', 'assets/material/energyZone.png');
+
+    // D1〜D3カード画像 (delta=Red, sigma=Blue, omega=Green)
     const cardFiles = {
       'card_delta_1d': 'D1_Red',   'card_sigma_1d': 'D1_Blue',  'card_omega_1d': 'D1_Green',
       'card_delta_2d': 'D2_Red',   'card_sigma_2d': 'D2_Blue',  'card_omega_2d': 'D2_Green',
@@ -48,6 +59,11 @@ export class GameScene extends Phaser.Scene {
     for (const [key, file] of Object.entries(cardFiles)) {
       this.load.image(key, `assets/material/cards/${file}.png`);
     }
+
+    // D4カード画像（スペシャルフィールド専用・delta=Red, sigma=Blue, omega=Green）
+    this.load.image('card_delta_4d', 'assets/material/D4_red.png');
+    this.load.image('card_sigma_4d', 'assets/material/D4_blue.png');
+    this.load.image('card_omega_4d', 'assets/material/D4_green.png');
   }
 
   create() {
@@ -57,10 +73,14 @@ export class GameScene extends Phaser.Scene {
 
     this._cardObjects = {};
     this._handCardObjects = [];
-    this._selectedForFusion = [];
     this._selectedAttacker = null;
+    this._isDraggingHandCard = false;
+    this._fusionCandidates = null;
     this._aiLocked = false;
     this._gameOver = false;
+    this._modalOpen = false;
+    this._initTooltip();
+    this.input.dragDistanceThreshold = 8;
 
     this._gm = new GameManager();
     this._bindEvents();
@@ -76,46 +96,60 @@ export class GameScene extends Phaser.Scene {
   }
 
   _drawFieldLayout() {
-    // ── バトルフィールド画像 ──
-    // enemyField.png: 679×228  yourField.png: 727×240
-    this.add.image(W / 2, AI_BATTLE_Y,     'enemyFieldImg').setDisplaySize(726, 244);
-    this.add.image(W / 2, PLAYER_BATTLE_Y, 'yourFieldImg') .setDisplaySize(726, 240);
+    // ── 描画順: special(最下層) → enemyField → yourField(最上層) ──
+    // specialが大きくてバトルフィールドと被っても、バトルフィールドが上に描かれるので隠れない
 
-    // ── 4D特別フィールドスロット（薄くガイド表示） ──
-    // specialField_transparent.png: 331×316
-    this._aiSpecialImg = this.add.image(W / 2, AI_SPECIAL_Y, 'specialFldImg')
-      .setDisplaySize(82, 78).setAlpha(0.18);
-    this._playerSpecialImg = this.add.image(W / 2, PLAYER_SPECIAL_Y, 'specialFldImg')
-      .setDisplaySize(82, 78).setAlpha(0.18);
+    // 1. 共有特別フィールド（最下層・540×360で大胆に大きく）
+    // specialField_transparent.png: 1536×1024(3:2) → 540×360 で原比率維持
+    this._sharedSpecialImg = this.add.image(W / 2, SHARED_SPECIAL_Y, 'specialFldImg')
+      .setDisplaySize(540, 360).setAlpha(0.75);
 
-    // ── 中央セパレータ ──
-    const sep = this.add.graphics();
-    sep.fillStyle(0x010408, 0.80);
-    sep.fillRect(0, LOG_Y - 28, W, 56);
-    sep.lineStyle(1, 0x162030, 1);
-    sep.strokeRect(0, LOG_Y - 28, W, 56);
+    // 2. AI バトルフィールド（中層・高さ183px）
+    this.add.image(W / 2, AI_BATTLE_Y,     'enemyFieldImg').setDisplaySize(726, 183);
 
-    // 4D ラベル
-    const d4s = { fontSize: '8px', fill: '#5a4500', fontFamily: 'monospace', letterSpacing: 3 };
-    this.add.text(W / 2, AI_SPECIAL_Y - 45,      '4D  SPECIAL', d4s).setOrigin(0.5);
-    this.add.text(W / 2, PLAYER_SPECIAL_Y + 44,  '4D  SPECIAL', d4s).setOrigin(0.5);
+    // 3. Player バトルフィールド（最上層・高さ200px: 少し縦に引き伸ばし）
+    this.add.image(W / 2, PLAYER_BATTLE_Y, 'yourFieldImg') .setDisplaySize(726, 200);
   }
 
   _initUI() {
-    // ── バトルログ（中央セパレータ内） ──
+    // ── バトルログパネル（左中央: y=188〜492 の縦帯）──
+    const LOG_PX = 4;           // パネル左端X
+    const LOG_PY = 188;         // パネル上端Y
+    const LOG_PW = 208;         // パネル幅
+    const LOG_PH = 304;         // パネル高さ
+    const logBg = this.add.graphics();
+    // 外枠グロー（内側に向けて複数描画で光彩）
+    logBg.lineStyle(4, 0x224488, 0.18);
+    logBg.strokeRoundedRect(LOG_PX - 2, LOG_PY - 2, LOG_PW + 4, LOG_PH + 4, 10);
+    // 背景塗り
+    logBg.fillStyle(0x060b14, 0.82);
+    logBg.fillRoundedRect(LOG_PX, LOG_PY, LOG_PW, LOG_PH, 8);
+    // ボーダー
+    logBg.lineStyle(1, 0x2255aa, 0.75);
+    logBg.strokeRoundedRect(LOG_PX, LOG_PY, LOG_PW, LOG_PH, 8);
+
+    // ヘッダー「BATTLE LOG」
+    this.add.text(LOG_PX + LOG_PW / 2, LOG_PY + 12, 'BATTLE LOG', {
+      fontSize: '9px', fill: '#4488cc', fontFamily: 'monospace', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5);
+    // セパレータ
+    const sep = this.add.graphics();
+    sep.lineStyle(1, 0x2255aa, 0.5);
+    sep.lineBetween(LOG_PX + 6, LOG_PY + 24, LOG_PX + LOG_PW - 6, LOG_PY + 24);
+
+    // ログテキスト行（6行）
     this._logTexts = [];
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
       this._logTexts.push(
-        this.add.text(W / 2, LOG_Y - 8 + i * 16, '', {
-          fontSize: '10px', fill: '#6688aa', fontFamily: 'monospace',
-        }).setOrigin(0.5, 0)
+        this.add.text(LOG_PX + 7, LOG_PY + 32 + i * 42, '', {
+          fontSize: '10px', fill: '#8ab8d8', fontFamily: 'monospace',
+          wordWrap: { width: LOG_PW - 14 },
+        }).setOrigin(0, 0)
       );
     }
 
     // ── AI HP パネル（左上） ──
-    // enemyHP.png: 320×204 → displaySize(214, 96)
     this.add.image(109, 48, 'enemyHpImg').setDisplaySize(214, 96);
-    // 画像内「20」の上書き用暗幕
     const aiCov = this.add.graphics();
     aiCov.fillStyle(0x050005, 0.92);
     aiCov.fillRect(5, 28, 98, 48);
@@ -127,7 +161,6 @@ export class GameScene extends Phaser.Scene {
     }).setOrigin(0.5, 0);
 
     // ── Player HP パネル（左下） ──
-    // playerHP.png: 329×190 → displaySize(214, 124)
     this.add.image(109, H - 62, 'playerHpImg').setDisplaySize(214, 124);
     const plCov = this.add.graphics();
     plCov.fillStyle(0x000508, 0.92);
@@ -139,24 +172,17 @@ export class GameScene extends Phaser.Scene {
       fontSize: '9px', fill: '#336688', fontFamily: 'monospace',
     }).setOrigin(0.5, 0);
 
-    // ── フェーズ / ターン表示 ──
-    this._phaseText = this.add.text(W / 2, LOG_Y, 'メインフェーズ', {
-      fontSize: '13px', fill: '#ffd700', fontFamily: 'monospace', fontStyle: 'bold',
-    }).setOrigin(0.5);
-    this._turnText = this.add.text(W / 2 - 150, LOG_Y, 'Turn 1', {
-      fontSize: '12px', fill: '#445566', fontFamily: 'monospace',
-    }).setOrigin(0.5);
+    // ── 右中央: 0D召喚ボタン（energyZone画像）──
+    this._summonBtn = this._makeImageButton(EZ_X, EZ_Y, 'energyZoneImg', EZ_W, EZ_H, () => this._onSummon());
+    this.add.text(EZ_X, EZ_Y + EZ_H / 2 + 7, '0D  SUMMON', {
+      fontSize: '10px', fill: '#00aaee', fontFamily: 'monospace', fontStyle: 'bold',
+    }).setOrigin(0.5, 0);
 
-    // ── 右サイド: 0D召喚ボタン（カスタム・青スタイル） ──
-    this._summonBtn = this._makeSummonButton(BTN_X, BTN_SUMMON_Y, () => this._onSummon());
+    // ── 右サイド: 攻撃フェーズ・ターン終了（大きめ・余白多め）──
+    this._phaseBtn   = this._makeImageButton(BTN_X, BTN_PHASE_Y, 'battleBtnImg',  252, 88, () => this._onPhaseSwitch());
+    this._endTurnBtn = this._makeImageButton(BTN_X, BTN_END_Y,   'endTurnBtnImg', 252, 88, () => this._onEndTurn());
 
-    // ── 右サイド: 攻撃フェーズ・ターン終了（画像ボタン） ──
-    // battleButton.png: 406×132 → displaySize(218, 70)
-    this._phaseBtn   = this._makeImageButton(BTN_X, BTN_PHASE_Y, 'battleBtnImg',  218, 70, () => this._onPhaseSwitch());
-    // turnEndButton.png: 417×144 → displaySize(218, 65) (下端 720px 内に収まる)
-    this._endTurnBtn = this._makeImageButton(BTN_X, BTN_END_Y,   'endTurnBtnImg', 218, 65, () => this._onEndTurn());
-
-    // ── ダイレクトアタックゾーン（AI HP パネル領域を赤枠で囲む） ──
+    // ── ダイレクトアタックゾーン（AI HP パネル領域） ──
     this._directAttackZone = this.add.graphics();
     this._directAttackZone.lineStyle(2, 0xff2233, 0.9);
     this._directAttackZone.strokeRect(2, 2, 213, 95);
@@ -167,20 +193,16 @@ export class GameScene extends Phaser.Scene {
     );
     this._directAttackZone.on('pointerdown', () => this._onDirectAttack());
 
-    // ── 融合ボタン（特別フィールド上、非表示） ──
-    this._fusionBtn = this._makeFusionButton(W / 2, PLAYER_SPECIAL_Y - 34);
-    this._fusionBtn.setAlpha(0).setVisible(false);
+    // ── ドロップゾーンハイライト（手札ドラッグ中にプレイヤーフィールドを強調）──
+    this._fieldDropHighlight = this.add.graphics();
 
-    // ── フィールドエフェクト表示 ──
-    this._playerFieldEffectText = this.add.text(W / 2, PLAYER_SPECIAL_Y + 46, '', {
-      fontSize: '11px', fill: '#ffd700', fontFamily: 'monospace',
-    }).setOrigin(0.5);
-    this._aiFieldEffectText = this.add.text(W / 2, AI_SPECIAL_Y - 46, '', {
-      fontSize: '11px', fill: '#ffd700', fontFamily: 'monospace',
-    }).setOrigin(0.5);
-
-    // ── 手札ラベル ──
-    this.add.text(232, HAND_Y - 18, '手札', { fontSize: '10px', fill: '#2a3a4a', fontFamily: 'monospace' });
+    // ── フィールドエフェクト表示（共有特別フィールドの左右: 540px幅→x=370-910を避ける）──
+    this._aiFieldEffectText = this.add.text(W / 2 - 285, SHARED_SPECIAL_Y, '', {
+      fontSize: '10px', fill: '#ffd700', fontFamily: 'monospace',
+    }).setOrigin(1, 0.5);
+    this._playerFieldEffectText = this.add.text(W / 2 + 285, SHARED_SPECIAL_Y, '', {
+      fontSize: '10px', fill: '#ffd700', fontFamily: 'monospace',
+    }).setOrigin(0, 0.5);
   }
 
   _bindEvents() {
@@ -246,11 +268,15 @@ export class GameScene extends Phaser.Scene {
 
     if (owner === 'player') {
       this._setupPlayerCardInteraction(cardObj);
+    } else {
+      this._setupAICardInteraction(cardObj, card);
     }
+    this._attachTooltip(cardObj);
     this._log(`${owner === 'player' ? 'あなた' : 'AI'}が${card.name}を召喚`);
   }
 
   _onCardDied(ev) {
+    this._hideTooltip();
     const { card } = ev;
     const cardObj = this._cardObjects[card.instanceId];
     if (cardObj) {
@@ -263,16 +289,30 @@ export class GameScene extends Phaser.Scene {
   }
 
   _onFusionSuccess(ev) {
-    const { owner, newCard, isSpecial, consumedA, consumedB } = ev;
+    const { owner, newCard, isSpecial, consumedA, consumedB, destroyedSpecial } = ev;
+
+    // 待機する完了数: 通常2枚（consumedA/B）+ 既存4D破壊があれば+1
+    let toWait = 2;
+    const spawnWhenReady = () => {
+      toWait--;
+      if (toWait <= 0) this._spawnFusionResult(owner, newCard, isSpecial);
+    };
+
+    // 既存の共有特別フィールドカードを破壊アニメーション
+    if (destroyedSpecial) {
+      const oldObj = this._cardObjects[destroyedSpecial.instanceId];
+      if (oldObj) {
+        toWait++;
+        delete this._cardObjects[destroyedSpecial.instanceId];
+        oldObj.playDeathAnim(spawnWhenReady);
+        this._log(`${destroyedSpecial.name}が消滅！`);
+      }
+    }
+
     const objA = this._cardObjects[consumedA.instanceId];
     const objB = this._cardObjects[consumedB.instanceId];
-    let done = 0;
-    const checkDone = () => {
-      done++;
-      if (done === 2) this._spawnFusionResult(owner, newCard, isSpecial);
-    };
-    if (objA) { delete this._cardObjects[consumedA.instanceId]; objA.playFusionAnim(checkDone); } else checkDone();
-    if (objB) { delete this._cardObjects[consumedB.instanceId]; objB.playFusionAnim(checkDone); } else checkDone();
+    if (objA) { delete this._cardObjects[consumedA.instanceId]; objA.playFusionAnim(spawnWhenReady); } else spawnWhenReady();
+    if (objB) { delete this._cardObjects[consumedB.instanceId]; objB.playFusionAnim(spawnWhenReady); } else spawnWhenReady();
 
     this._log(`${owner === 'player' ? 'あなた' : 'AI'}が融合！→${newCard.name}`);
   }
@@ -285,7 +325,10 @@ export class GameScene extends Phaser.Scene {
 
     if (owner === 'player') {
       this._setupPlayerCardInteraction(cardObj);
+    } else {
+      this._setupAICardInteraction(cardObj, card);
     }
+    this._attachTooltip(cardObj);
 
     if (!isSpecial) {
       this._repositionFieldCards(owner);
@@ -330,11 +373,10 @@ export class GameScene extends Phaser.Scene {
     this._log(labels[ev.effectId] || '4Dフィールド効果発動');
     const pos = this._specialFieldPos(ev.owner);
     this._flashEffect(pos.x, pos.y);
-    // 特別フィールド画像を輝かせる
-    const specImg = ev.owner === 'player' ? this._playerSpecialImg : this._aiSpecialImg;
-    if (specImg) {
-      this.tweens.add({ targets: specImg, alpha: 0.9, duration: 300, yoyo: true, hold: 600,
-        onComplete: () => specImg.setAlpha(0.18) });
+    // 共有特別フィールド画像を輝かせる
+    if (this._sharedSpecialImg) {
+      this.tweens.add({ targets: this._sharedSpecialImg, alpha: 1, duration: 300, yoyo: true, hold: 600,
+        onComplete: () => this._sharedSpecialImg.setAlpha(0.55) });
     }
   }
 
@@ -356,8 +398,7 @@ export class GameScene extends Phaser.Scene {
 
   _onPhaseChanged(ev) {
     const labels = { main: 'メインフェーズ', attack: '攻撃フェーズ' };
-    this._phaseText.setText(labels[ev.phase] || ev.phase);
-    this._turnText.setText(`Turn ${ev.turn || this._gm.state?.turn || 1}`);
+    this._showPhaseAnim(labels[ev.phase] || ev.phase);
     this._clearFusionSelection();
   }
 
@@ -369,7 +410,7 @@ export class GameScene extends Phaser.Scene {
 
   _onTurnChanged(ev) {
     const isPlayer = ev.currentPlayer === 'player';
-    this._phaseText.setText(isPlayer ? 'あなたのターン' : 'AIのターン');
+    this._showPhaseAnim(isPlayer ? '▶ あなたのターン' : '▶ AI のターン');
     this._aiLocked = !isPlayer;
     if (isPlayer) {
       this._refreshHandUI(this._gm.state.player.hand);
@@ -413,39 +454,39 @@ export class GameScene extends Phaser.Scene {
     cardObj.on('pointerdown', () => this._onPlayerCardClick(cardObj));
   }
 
+  _setupAICardInteraction(cardObj, inst) {
+    cardObj.on('pointerover', () => {
+      const state = this._gm.state;
+      if (state.phase === 'attack' && state.currentPlayer === 'player' && this._selectedAttacker) {
+        this.input.setDefaultCursor('crosshair');
+      }
+    });
+    cardObj.on('pointerout', () => this.input.setDefaultCursor('default'));
+    cardObj.on('pointerdown', () => {
+      if (this._aiLocked || this._gameOver || this._modalOpen) return;
+      const state = this._gm.state;
+      if (state.phase !== 'attack' || state.currentPlayer !== 'player') return;
+      if (!this._selectedAttacker) return;
+      const attackerId = this._selectedAttacker.instanceId;
+      const result = this._gm.executeAttack('player', attackerId, inst.instanceId, 'ai');
+      if (result.ok) {
+        this._clearAttackSelection();
+        this._unhighlightAllTargets();
+      } else {
+        this._log(`攻撃失敗: ${result.reason}`);
+      }
+    });
+  }
+
   _onPlayerCardClick(cardObj) {
     if (this._aiLocked || this._gameOver) return;
     const state = this._gm.state;
     if (state.currentPlayer !== 'player') return;
     const inst = cardObj.cardInstance;
 
-    if (state.phase === 'main') {
-      this._handleFusionSelection(cardObj, inst);
-    } else if (state.phase === 'attack') {
+    if (state.phase === 'attack') {
       this._handleAttackSelection(cardObj, inst);
     }
-  }
-
-  _handleFusionSelection(cardObj, inst) {
-    if (inst.dimension === 4) return;
-
-    const idx = this._selectedForFusion.indexOf(cardObj);
-    if (idx !== -1) {
-      this._selectedForFusion.splice(idx, 1);
-      cardObj.setSelected(false);
-    } else {
-      if (this._selectedForFusion.length >= 2) {
-        this._selectedForFusion[0].setSelected(false);
-        this._selectedForFusion.shift();
-      }
-      this._selectedForFusion.push(cardObj);
-      cardObj.setSelected(true);
-    }
-
-    const showFusion = this._selectedForFusion.length === 2 &&
-      this._selectedForFusion.every(c => this._isOnPlayerField(c));
-    this._fusionBtn.setVisible(showFusion);
-    this._fusionBtn.setAlpha(showFusion ? 1 : 0);
   }
 
   _isOnPlayerField(cardObj) {
@@ -507,34 +548,270 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  _onFusion() {
-    if (this._selectedForFusion.length !== 2) return;
-    const state = this._gm.state;
-    const [cardObjA, cardObjB] = this._selectedForFusion;
-    const instA = cardObjA.cardInstance;
-    const instB = cardObjB.cardInstance;
-
-    const targetDim = instA.dimension + 1;
-    const hand = state.player.hand;
-    const handCard = hand.find(c => c.dimension === targetDim);
-    if (!handCard) {
-      this._log(`融合失敗: 手札に次元${targetDim}のカードがありません`);
-      return;
-    }
-
-    const result = this._gm.fuse('player', instA.instanceId, instB.instanceId, handCard.instanceId);
-    if (!result.ok) {
-      this._log(`融合失敗: ${result.reason}`);
-    } else {
-      this._clearFusionSelection();
-    }
+  _clearFusionSelection() {
+    this._clearFusionHighlight();
   }
 
-  _clearFusionSelection() {
-    for (const c of this._selectedForFusion) c.setSelected(false);
-    this._selectedForFusion = [];
-    this._fusionBtn.setVisible(false);
-    this._fusionBtn.setAlpha(0);
+  // ===== ドラッグ融合 =====
+
+  _isOnPlayerBattleField(x, y) {
+    return x >= W / 2 - 363 && x <= W / 2 + 363 &&
+           y >= PLAYER_BATTLE_Y - 100 && y <= PLAYER_BATTLE_Y + 100;
+  }
+
+  _highlightFusionCandidates(handInst) {
+    this._clearFusionHighlight();
+    const targetDim = handInst.dimension - 1;
+    const fieldCards = this._gm.state.field.getFilledSlots('player');
+    this._fusionCandidates = fieldCards.filter(c => c.dimension === targetDim).slice(0, 2);
+    for (const inst of this._fusionCandidates) {
+      const obj = this._cardObjects[inst.instanceId];
+      if (obj) obj.setSelected(true);
+    }
+    // バトルフィールドをハイライト
+    const canFuse = this._fusionCandidates.length >= 2;
+    const g = this._fieldDropHighlight;
+    g.clear();
+    const color = canFuse ? 0xffd700 : 0xff4444;
+    g.lineStyle(3, color, 0.9);
+    g.fillStyle(color, canFuse ? 0.12 : 0.06);
+    g.fillRoundedRect(W / 2 - 363, PLAYER_BATTLE_Y - 100, 726, 200, 10);
+    g.strokeRoundedRect(W / 2 - 363, PLAYER_BATTLE_Y - 100, 726, 200, 10);
+  }
+
+  _clearFusionHighlight() {
+    if (this._fusionCandidates) {
+      for (const inst of this._fusionCandidates) {
+        const obj = this._cardObjects[inst.instanceId];
+        if (obj) obj.setSelected(false);
+      }
+      this._fusionCandidates = null;
+    }
+    if (this._fieldDropHighlight) this._fieldDropHighlight.clear();
+  }
+
+  _attemptFusionDrop(handCardInst, cardObj) {
+    if (this._aiLocked || this._gameOver) return false;
+    const state = this._gm.state;
+    if (state.phase !== 'main' || state.currentPlayer !== 'player') return false;
+
+    const targetDim = handCardInst.dimension - 1;
+    const fieldCards = state.field.getFilledSlots('player');
+    const candidates = fieldCards.filter(c => c.dimension === targetDim);
+
+    if (candidates.length < 2) {
+      this._log(`融合失敗: D${targetDim}のカードが2体必要です（現在${candidates.length}体）`);
+      return false;
+    }
+
+    // 候補が3体以上: 選択ダイアログを表示（cardObjはキャンセル時に手札に戻す）
+    if (candidates.length >= 3) {
+      this._showFusionSelectModal(handCardInst, cardObj, candidates);
+      return true;
+    }
+
+    const result = this._gm.fuse(
+      'player',
+      candidates[0].instanceId,
+      candidates[1].instanceId,
+      handCardInst.instanceId
+    );
+    if (!result.ok) {
+      this._log(`融合失敗: ${result.reason}`);
+      return false;
+    }
+    return true;
+  }
+
+  _showFusionSelectModal(handCardInst, cardObj, candidates) {
+    this._modalOpen = true;
+
+    const cx = W / 2;
+    const mW = 460;
+    const ROW_H = 54;
+    const HEADER_H = 58;
+    const FOOTER_H = 66;
+    const mH = HEADER_H + ROW_H * candidates.length + FOOTER_H;
+    const mx = cx - mW / 2;
+    const my = H / 2 - mH / 2;
+
+    const con = this.add.container(0, 0).setDepth(200);
+
+    // 全画面ブロッカー（背後のゲーム要素への入力を遮断）
+    const blocker = this.add.zone(0, 0, W, H).setOrigin(0, 0).setInteractive();
+    con.add(blocker);
+
+    // 暗幕オーバーレイ
+    const overlay = this.add.graphics();
+    overlay.fillStyle(0x000000, 0.65);
+    overlay.fillRect(0, 0, W, H);
+    con.add(overlay);
+
+    // パネル背景
+    const panel = this.add.graphics();
+    panel.fillStyle(0x080f1e, 0.97);
+    panel.fillRoundedRect(mx, my, mW, mH, 12);
+    panel.lineStyle(1.5, 0x2255aa, 0.85);
+    panel.strokeRoundedRect(mx, my, mW, mH, 12);
+    con.add(panel);
+
+    // タイトル
+    con.add(this.add.text(cx, my + 18, '融合素材を2体選択', {
+      fontSize: '14px', fill: '#aaccff', fontFamily: 'monospace', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5));
+    con.add(this.add.text(cx, my + 38, `D${handCardInst.dimension - 1} のカードを2枚選んでください`, {
+      fontSize: '9px', fill: '#445577', fontFamily: 'monospace',
+    }).setOrigin(0.5, 0.5));
+
+    const TYPE_COL = { delta: 0xe63946, sigma: 0x4895ef, omega: 0x4cc9a4 };
+    const TYPE_SYM = { delta: 'δ', sigma: 'σ', omega: 'Ω' };
+
+    const selected = new Set();
+    const rowBgGfxList = [];
+    const checkTexts = [];
+
+    const drawRowBg = (gfx, i, isSel) => {
+      gfx.clear();
+      const ry = my + HEADER_H + i * ROW_H;
+      if (isSel) {
+        gfx.fillStyle(0x1a2e50, 0.95);
+        gfx.fillRoundedRect(mx + 8, ry + 4, mW - 16, ROW_H - 8, 6);
+        gfx.lineStyle(2, 0xffd700, 1);
+        gfx.strokeRoundedRect(mx + 8, ry + 4, mW - 16, ROW_H - 8, 6);
+      } else {
+        gfx.fillStyle(0x111828, 0.85);
+        gfx.fillRoundedRect(mx + 8, ry + 4, mW - 16, ROW_H - 8, 6);
+        gfx.lineStyle(1, 0x223355, 0.6);
+        gfx.strokeRoundedRect(mx + 8, ry + 4, mW - 16, ROW_H - 8, 6);
+      }
+    };
+
+    // 確定ボタン（参照を先に確保してupdateConfirmで使う）
+    const confirmBtnGfx = this.add.graphics();
+    const confirmBtnText = this.add.text(cx + 10 + 90, my + mH - FOOTER_H + 33, '融合実行', {
+      fontSize: '12px', fill: '#88ccff', fontFamily: 'monospace', fontStyle: 'bold',
+    }).setOrigin(0.5, 0.5);
+
+    const updateConfirm = () => {
+      const ready = selected.size === 2;
+      confirmBtnGfx.clear();
+      confirmBtnGfx.fillStyle(ready ? 0x0e2d6e : 0x0a1525, ready ? 0.95 : 0.6);
+      confirmBtnGfx.fillRoundedRect(cx + 10, my + mH - FOOTER_H + 13, 180, 40, 8);
+      confirmBtnGfx.lineStyle(1.5, ready ? 0x4488ff : 0x223344, ready ? 0.95 : 0.35);
+      confirmBtnGfx.strokeRoundedRect(cx + 10, my + mH - FOOTER_H + 13, 180, 40, 8);
+      confirmBtnText.setAlpha(ready ? 1 : 0.35);
+    };
+
+    // 候補カード行
+    for (let i = 0; i < candidates.length; i++) {
+      const inst = candidates[i];
+      const ry = my + HEADER_H + i * ROW_H;
+      const typeColor = TYPE_COL[inst.type] ?? 0x888888;
+      const hexCol = '#' + typeColor.toString(16).padStart(6, '0');
+
+      const rowBgGfx = this.add.graphics();
+      drawRowBg(rowBgGfx, i, false);
+      rowBgGfxList.push(rowBgGfx);
+      con.add(rowBgGfx);
+
+      // タイプカラーバー
+      const typeBar = this.add.graphics();
+      typeBar.fillStyle(typeColor, 0.9);
+      typeBar.fillRoundedRect(mx + 14, ry + 10, 4, ROW_H - 20, 2);
+      con.add(typeBar);
+
+      // タイプ記号
+      con.add(this.add.text(mx + 30, ry + ROW_H / 2, TYPE_SYM[inst.type] ?? '?', {
+        fontSize: '15px', fill: hexCol, fontFamily: 'monospace', fontStyle: 'bold',
+      }).setOrigin(0.5, 0.5));
+
+      // カード名
+      con.add(this.add.text(mx + 48, ry + ROW_H / 2 - 9, inst.name, {
+        fontSize: '11px', fill: '#cce0ff', fontFamily: 'monospace', fontStyle: 'bold',
+      }).setOrigin(0, 0.5));
+
+      // ステータス
+      con.add(this.add.text(mx + 48, ry + ROW_H / 2 + 9,
+        `ATK:${inst.currentAtk}  DEF:${inst.currentDef}  HP:${inst.currentHp}/${inst.maxHp}`, {
+        fontSize: '9px', fill: '#7799bb', fontFamily: 'monospace',
+      }).setOrigin(0, 0.5));
+
+      // チェックマーク
+      const chk = this.add.text(mx + mW - 20, ry + ROW_H / 2, '✓', {
+        fontSize: '16px', fill: '#ffd700', fontFamily: 'monospace',
+      }).setOrigin(0.5, 0.5).setAlpha(0);
+      checkTexts.push(chk);
+      con.add(chk);
+
+      // クリック領域
+      const hitZone = this.add.zone(mx + 8, ry + 4, mW - 16, ROW_H - 8).setOrigin(0, 0).setInteractive();
+      hitZone.on('pointerdown', () => {
+        if (selected.has(inst.instanceId)) {
+          selected.delete(inst.instanceId);
+          drawRowBg(rowBgGfxList[i], i, false);
+          checkTexts[i].setAlpha(0);
+        } else if (selected.size < 2) {
+          selected.add(inst.instanceId);
+          drawRowBg(rowBgGfxList[i], i, true);
+          checkTexts[i].setAlpha(1);
+        }
+        updateConfirm();
+      });
+      hitZone.on('pointerover', () => this.input.setDefaultCursor('pointer'));
+      hitZone.on('pointerout',  () => this.input.setDefaultCursor('default'));
+      con.add(hitZone);
+    }
+
+    // キャンセルボタン
+    const cancelGfx = this.add.graphics();
+    cancelGfx.fillStyle(0x1a0a0a, 0.9);
+    cancelGfx.fillRoundedRect(mx + 8, my + mH - FOOTER_H + 13, 180, 40, 8);
+    cancelGfx.lineStyle(1.5, 0x663344, 0.7);
+    cancelGfx.strokeRoundedRect(mx + 8, my + mH - FOOTER_H + 13, 180, 40, 8);
+    con.add(cancelGfx);
+
+    con.add(this.add.text(mx + 8 + 90, my + mH - FOOTER_H + 33, 'キャンセル', {
+      fontSize: '12px', fill: '#cc6677', fontFamily: 'monospace',
+    }).setOrigin(0.5, 0.5));
+
+    const cancelZone = this.add.zone(mx + 8, my + mH - FOOTER_H + 13, 180, 40).setOrigin(0, 0).setInteractive();
+    cancelZone.on('pointerdown', () => {
+      con.destroy(true);
+      this._modalOpen = false;
+      this.input.setDefaultCursor('default');
+      if (cardObj.active) {
+        this.tweens.add({
+          targets: cardObj,
+          x: cardObj._handX, y: HAND_Y,
+          scaleX: HAND_SCALE, scaleY: HAND_SCALE,
+          duration: 200, ease: 'Power2',
+        });
+      }
+    });
+    cancelZone.on('pointerover', () => this.input.setDefaultCursor('pointer'));
+    cancelZone.on('pointerout',  () => this.input.setDefaultCursor('default'));
+    con.add(cancelZone);
+
+    // 確定ボタン（Graphics/Textは先に宣言済み）
+    con.add(confirmBtnGfx);
+    con.add(confirmBtnText);
+    updateConfirm();
+
+    const confirmZone = this.add.zone(cx + 10, my + mH - FOOTER_H + 13, 180, 40).setOrigin(0, 0).setInteractive();
+    confirmZone.on('pointerdown', () => {
+      if (selected.size !== 2) return;
+      const [idA, idB] = [...selected];
+      const result = this._gm.fuse('player', idA, idB, handCardInst.instanceId);
+      con.destroy(true);
+      this._modalOpen = false;
+      this.input.setDefaultCursor('default');
+      if (!result.ok) {
+        this._log(`融合失敗: ${result.reason}`);
+      }
+    });
+    confirmZone.on('pointerover', () => { if (selected.size === 2) this.input.setDefaultCursor('pointer'); });
+    confirmZone.on('pointerout',  () => this.input.setDefaultCursor('default'));
+    con.add(confirmZone);
   }
 
   _clearAttackSelection() {
@@ -553,56 +830,86 @@ export class GameScene extends Phaser.Scene {
     }
     this._handCardObjects = [];
 
-    // 10枚でも右サイドボタン(x≈1051〜)と重ならないよう最大幅680pxに収める
-    const spacing = hand.length > 1 ? Math.min(90, 680 / (hand.length - 1)) : 90;
+    const scaledW = CARD_W * HAND_SCALE;
+    const maxSpacing = scaledW + 10;
+    const spacing = hand.length > 1 ? Math.min(maxSpacing, 680 / (hand.length - 1)) : maxSpacing;
     const startX = W / 2 - ((hand.length - 1) * spacing) / 2;
+
     for (let i = 0; i < hand.length; i++) {
       const inst = hand[i];
       const x = startX + i * spacing;
       const cardObj = new Card(this, x, HAND_Y, inst);
+      cardObj.setScale(HAND_SCALE);
+      cardObj._handX = x;
       this._handCardObjects.push(cardObj);
 
       cardObj.on('pointerover', () => {
-        if (!this._aiLocked) {
-          this.input.setDefaultCursor('pointer');
-          this.tweens.add({ targets: cardObj, y: HAND_Y - 15, duration: 150, ease: 'Power2' });
+        if (!this._aiLocked && !this._isDraggingHandCard) {
+          this.input.setDefaultCursor('grab');
+          this.tweens.add({ targets: cardObj, y: HAND_Y - 22, duration: 150, ease: 'Power2' });
         }
       });
       cardObj.on('pointerout', () => {
-        this.input.setDefaultCursor('default');
-        this.tweens.add({ targets: cardObj, y: HAND_Y, duration: 150, ease: 'Power2' });
+        if (!this._isDraggingHandCard) {
+          this.input.setDefaultCursor('default');
+          this.tweens.add({ targets: cardObj, y: HAND_Y, duration: 150, ease: 'Power2' });
+        }
       });
-      cardObj.on('pointerdown', () => this._onHandCardClick(cardObj, inst));
-    }
-  }
 
-  _onHandCardClick(cardObj, inst) {
-    if (this._aiLocked || this._gameOver) return;
-    const state = this._gm.state;
-    if (state.phase !== 'main' || state.currentPlayer !== 'player') return;
-    if (inst.dimension === 0) return;
+      // D1+ カードはドラッグして自軍バトルフィールドにドロップで融合召喚
+      if (inst.dimension >= 1) {
+        this.input.setDraggable(cardObj);
 
-    const idx = this._selectedForFusion.indexOf(cardObj);
-    if (idx !== -1) {
-      this._selectedForFusion.splice(idx, 1);
-      cardObj.setSelected(false);
-    } else {
-      if (this._selectedForFusion.length < 2) {
-        this._selectedForFusion.push(cardObj);
-        cardObj.setSelected(true);
+        cardObj.on('dragstart', () => {
+          if (this._aiLocked || this._gameOver || this._modalOpen) return;
+          const state = this._gm.state;
+          if (state.phase !== 'main' || state.currentPlayer !== 'player') return;
+          this._isDraggingHandCard = true;
+          this._hideTooltip();
+          this.tweens.killTweensOf(cardObj);
+          this.children.bringToTop(cardObj);
+          this.input.setDefaultCursor('grabbing');
+          this._highlightFusionCandidates(inst);
+        });
+
+        cardObj.on('drag', (pointer, dragX, dragY) => {
+          if (!this._isDraggingHandCard) return;
+          cardObj.x = dragX;
+          cardObj.y = dragY;
+        });
+
+        cardObj.on('dragend', (pointer) => {
+          if (!this._isDraggingHandCard) return;
+          this._isDraggingHandCard = false;
+          this._clearFusionHighlight();
+          this.input.setDefaultCursor('default');
+
+          const onField = this._isOnPlayerBattleField(pointer.x, pointer.y);
+          const fusionOk = onField && this._attemptFusionDrop(inst, cardObj);
+
+          if (!fusionOk && cardObj.active) {
+            this.tweens.add({
+              targets: cardObj,
+              x: cardObj._handX,
+              y: HAND_Y,
+              scaleX: HAND_SCALE,
+              scaleY: HAND_SCALE,
+              duration: 200,
+              ease: 'Power2',
+            });
+          }
+        });
       }
-    }
 
-    const twoFieldCards = this._selectedForFusion.filter(c => this._isOnPlayerField(c));
-    const showFusion = twoFieldCards.length === 2;
-    this._fusionBtn.setVisible(showFusion);
-    this._fusionBtn.setAlpha(showFusion ? 1 : 0);
+      this._attachTooltip(cardObj);
+    }
   }
 
   // ===== AIターン =====
 
   async _runAITurn() {
     if (this._gameOver) return;
+    this._hideTooltip();
     this._aiLocked = true;
     this.input.enabled = false;
     await this._gm.executeAITurn(this);
@@ -623,8 +930,9 @@ export class GameScene extends Phaser.Scene {
     return { x, y };
   }
 
-  _specialFieldPos(owner) {
-    return { x: W / 2, y: owner === 'player' ? PLAYER_SPECIAL_Y : AI_SPECIAL_Y };
+  _specialFieldPos(_owner) {
+    // 共有特別フィールドは画面中央1箇所のみ
+    return { x: W / 2, y: SHARED_SPECIAL_Y };
   }
 
   _repositionFieldCards(owner) {
@@ -669,10 +977,44 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  // フェーズ切り替え時に画面中央に大きく表示 → 1秒後にフェードアウト
+  _showPhaseAnim(text) {
+    if (this._phaseFlyText && this._phaseFlyText.active) {
+      this.tweens.killTweensOf(this._phaseFlyText);
+      this._phaseFlyText.destroy();
+    }
+    this._phaseFlyText = null;
+
+    const txt = this.add.text(W / 2, H / 2 - 40, text, {
+      fontSize: '38px', fill: '#ffd700', fontFamily: 'monospace', fontStyle: 'bold',
+      stroke: '#000000', strokeThickness: 5,
+    }).setOrigin(0.5).setAlpha(0).setDepth(200);
+    this._phaseFlyText = txt;
+
+    this.tweens.add({
+      targets: txt,
+      alpha: 1,
+      y: H / 2 - 50,
+      duration: 180,
+      ease: 'Power2',
+      onComplete: () => {
+        this.time.delayedCall(800, () => {
+          if (!txt.active) return;
+          this.tweens.add({
+            targets: txt,
+            alpha: 0,
+            duration: 300,
+            onComplete: () => { if (txt.active) txt.destroy(); },
+          });
+        });
+      },
+    });
+  }
+
   _log(msg) {
     for (let i = this._logTexts.length - 1; i > 0; i--) {
       this._logTexts[i].setText(this._logTexts[i - 1].text);
-      this._logTexts[i].setAlpha(1 - i * 0.3);
+      this._logTexts[i].setAlpha(Math.max(0.12, 1 - i * 0.15));
     }
     this._logTexts[0].setText(msg);
     this._logTexts[0].setAlpha(1);
@@ -709,75 +1051,142 @@ export class GameScene extends Phaser.Scene {
     return img;
   }
 
-  // 0D召喚ボタン（battleButton の青系スタイルに合わせたカスタムコンテナ）
-  _makeSummonButton(x, y, onClick) {
-    const bw = 200, bh = 52;
-    const container = this.add.container(x, y);
+  // ===== ツールチップ =====
 
-    const bg = this.add.graphics();
-    const drawBg = (hover) => {
-      bg.clear();
-      bg.fillStyle(0x0055bb, hover ? 0.55 : 0.22);
-      bg.lineStyle(2, hover ? 0x44ddff : 0x0099ee, 1);
-      bg.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 4);
-      bg.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 4);
-      if (!hover) {
-        bg.lineStyle(1, 0x0077cc, 0.4);
-        bg.strokeRect(-bw / 2 + 4, -bh / 2 + 4, bw - 8, bh - 8);
-      }
-    };
-    drawBg(false);
+  _initTooltip() {
+    this._tooltipContainer = null;
+    this._tooltipTimer = null;
+  }
 
-    // ダイヤアイコン（フィールドスロットと共通のシンボル）
-    const icon = this.add.text(-bw / 2 + 28, 0, '◇', {
-      fontSize: '20px', fill: '#00aaee', fontFamily: 'monospace',
-    }).setOrigin(0.5);
-
-    const title = this.add.text(18, -8, '0D SUMMON', {
-      fontSize: '12px', fill: '#00bbff', fontFamily: 'monospace', fontStyle: 'bold',
-    }).setOrigin(0.5, 0);
-    const sub = this.add.text(18, 7, 'ゼロ次元召喚', {
-      fontSize: '8px', fill: '#005577', fontFamily: 'monospace',
-    }).setOrigin(0.5, 0);
-
-    container.add([bg, icon, title, sub]);
-    container.setInteractive(
-      new Phaser.Geom.Rectangle(-bw / 2, -bh / 2, bw, bh),
-      Phaser.Geom.Rectangle.Contains
-    );
-
-    container.on('pointerover', () => {
-      if (container.alpha < 0.5) return;
-      drawBg(true);
-      this.input.setDefaultCursor('pointer');
+  _attachTooltip(cardObj) {
+    cardObj.on('pointerover', () => {
+      if (this._tooltipTimer) { this._tooltipTimer.remove(); this._tooltipTimer = null; }
+      this._tooltipTimer = this.time.delayedCall(500, () => {
+        this._tooltipTimer = null;
+        if (cardObj.active) this._showTooltip(cardObj);
+      });
     });
-    container.on('pointerout', () => { drawBg(false); this.input.setDefaultCursor('default'); });
-    container.on('pointerdown', () => { if (container.alpha > 0.5) onClick(); });
-
-    return container;
+    cardObj.on('pointerout', () => {
+      if (this._tooltipTimer) { this._tooltipTimer.remove(); this._tooltipTimer = null; }
+      this._hideTooltip();
+    });
   }
 
-  // 融合ボタン（黄金の角丸矩形、Container を返す）
-  _makeFusionButton(x, y) {
-    const bw = 130, bh = 34;
-    const container = this.add.container(x, y);
+  _showTooltip(cardObj) {
+    this._hideTooltip();
+
+    const inst = cardObj.cardInstance;
+    const content = this._tooltipContent(inst);
+    const padding = 8;
+    const arrowH = 10;
+
+    // Measure actual rendered size — content is pre-wrapped so no wordWrap needed
+    const probe = this.add.text(0, -9999, content, {
+      fontSize: '12px', fill: '#fff', fontFamily: 'monospace',
+    });
+    const tooltipW = Math.max(probe.width + padding * 2, 160);
+    const tooltipH = Math.max(probe.height + padding * 2, 30);
+    probe.destroy();
+
+    const cardHalfH = (CARD_H / 2) * (cardObj.scaleY || 1);
+    const cardTopWorldY = cardObj.y - cardHalfH;
+    const showBelow = cardTopWorldY - arrowH - tooltipH < 10;
+
+    const tooltipX = Phaser.Math.Clamp(cardObj.x, tooltipW / 2 + 4, W - tooltipW / 2 - 4);
+    const tooltipY = showBelow
+      ? cardObj.y + cardHalfH + arrowH + tooltipH / 2
+      : cardObj.y - cardHalfH - arrowH - tooltipH / 2;
+
+    const container = this.add.container(tooltipX, tooltipY).setDepth(1000);
 
     const bg = this.add.graphics();
-    bg.fillStyle(0xffd700, 0.18);
-    bg.lineStyle(2, 0xffd700, 1);
-    bg.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 8);
-    bg.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 8);
 
-    const label = this.add.text(0, 0, '⚡ 融合！', {
-      fontSize: '13px', fill: '#ffd700', fontFamily: 'monospace', fontStyle: 'bold',
-    }).setOrigin(0.5);
+    // Fill: box + arrow
+    bg.fillStyle(0x080c1e, 0.94);
+    bg.fillRoundedRect(-tooltipW / 2, -tooltipH / 2, tooltipW, tooltipH, 6);
 
-    container.add([bg, label]);
-    container.setInteractive(new Phaser.Geom.Rectangle(-bw / 2, -bh / 2, bw, bh), Phaser.Geom.Rectangle.Contains);
-    container.on('pointerover', () => { bg.setAlpha(1.6); this.input.setDefaultCursor('pointer'); });
-    container.on('pointerout',  () => { bg.setAlpha(1);   this.input.setDefaultCursor('default'); });
-    container.on('pointerdown', () => this._onFusion());
+    const arrowBaseX = Phaser.Math.Clamp(cardObj.x - tooltipX, -tooltipW / 2 + 14, tooltipW / 2 - 14);
+    if (showBelow) {
+      bg.fillTriangle(arrowBaseX - 8, -tooltipH / 2, arrowBaseX + 8, -tooltipH / 2, arrowBaseX, -tooltipH / 2 - arrowH);
+    } else {
+      bg.fillTriangle(arrowBaseX - 8, tooltipH / 2, arrowBaseX + 8, tooltipH / 2, arrowBaseX, tooltipH / 2 + arrowH);
+    }
 
-    return container;
+    // Border: box
+    bg.lineStyle(1, 0x3a7abf, 0.9);
+    bg.strokeRoundedRect(-tooltipW / 2, -tooltipH / 2, tooltipW, tooltipH, 6);
+
+    // Border: arrow sides only (not the base, which merges with box border)
+    if (showBelow) {
+      bg.lineBetween(arrowBaseX - 8, -tooltipH / 2, arrowBaseX, -tooltipH / 2 - arrowH);
+      bg.lineBetween(arrowBaseX + 8, -tooltipH / 2, arrowBaseX, -tooltipH / 2 - arrowH);
+    } else {
+      bg.lineBetween(arrowBaseX - 8, tooltipH / 2, arrowBaseX, tooltipH / 2 + arrowH);
+      bg.lineBetween(arrowBaseX + 8, tooltipH / 2, arrowBaseX, tooltipH / 2 + arrowH);
+    }
+
+    const text = this.add.text(
+      -tooltipW / 2 + padding,
+      -tooltipH / 2 + padding,
+      content,
+      {
+        fontSize: '12px', fill: '#c8d8f0', fontFamily: 'monospace',
+        align: 'left',
+      }
+    ).setOrigin(0, 0);
+
+    container.add([bg, text]);
+    this._tooltipContainer = container;
   }
+
+  _hideTooltip() {
+    if (this._tooltipContainer) {
+      this._tooltipContainer.destroy();
+      this._tooltipContainer = null;
+    }
+  }
+
+  _tooltipContent(inst) {
+    const typeNames = { delta: 'Delta (δ)', sigma: 'Sigma (σ)', omega: 'Omega (Ω)' };
+    const typeLine = inst.type ? typeNames[inst.type] : 'No Type';
+
+    const lines = [];
+    lines.push(inst.name);
+    lines.push(`D${inst.dimension}  ${typeLine}`);
+
+    if (inst.dimension >= 1 && inst.dimension <= 3) {
+      lines.push(`ATK:${inst.currentAtk}  DEF:${inst.currentDef}  HP:${inst.currentHp}/${inst.maxHp}`);
+    }
+
+    if (inst.effect_desc) {
+      lines.push('');
+      // Strip the "フィールド効果：" prefix (already implied by D4 label above)
+      const desc = inst.effect_desc.replace('フィールド効果：', '');
+      // Pre-wrap at 20 full-width-char columns (MAX=40 half-width units ≈ 288px at 12px mono)
+      lines.push(this._wrapJaText(desc, 20));
+    }
+
+    return lines.join('\n');
+  }
+
+  // Wrap mixed Japanese/ASCII text by half-width units (CJK≥0x3000 = 2, ASCII = 1)
+  _wrapJaText(text, maxDoubleWidthChars) {
+    const MAX = maxDoubleWidthChars * 2;
+    const result = [];
+    let line = '', w = 0;
+    for (const ch of text) {
+      const cw = ch.charCodeAt(0) >= 0x3000 ? 2 : 1;
+      if (w + cw > MAX && line) {
+        result.push(line);
+        line = ch;
+        w = cw;
+      } else {
+        line += ch;
+        w += cw;
+      }
+    }
+    if (line) result.push(line);
+    return result.join('\n');
+  }
+
 }

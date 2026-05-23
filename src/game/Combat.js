@@ -89,9 +89,6 @@ export class Combat {
       }
     }
 
-    attackerInst.hasAttacked = true;
-    attackerInst.attackCount++;
-
     return result;
   }
 
