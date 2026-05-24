@@ -1898,11 +1898,12 @@ export class GameScene extends Phaser.Scene {
     let used, maxS;
     if (isPlayerTurn) {
       used = state.player.normalSummonCount;
-      maxS = GameManager.calcMaxSummons(state.turn, 'player');
+      maxS = GameManager.calcMaxSummons(state.turn, 'player', state.firstPlayer);
     } else {
       // AIターン中: 次のプレイヤーターンの上限をプレビュー
+      const nextTurn = state.currentPlayer === state.firstPlayer ? state.turn : state.turn + 1;
       used = 0;
-      maxS = GameManager.calcMaxSummons(state.turn + 1, 'player');
+      maxS = GameManager.calcMaxSummons(nextTurn, 'player', state.firstPlayer);
     }
     const remaining = maxS - used;
     const dimAlpha = isPlayerTurn ? 1 : 0.4;
@@ -1938,7 +1939,7 @@ export class GameScene extends Phaser.Scene {
     const isMain = state.phase === 'main';
     const isAttack = state.phase === 'attack';
 
-    const maxS = GameManager.calcMaxSummons(state.turn, 'player');
+    const maxS = GameManager.calcMaxSummons(state.turn, 'player', state.firstPlayer);
     const canSummon = state.player.normalSummonCount < maxS;
     this._summonBtn.setAlpha(isPlayerTurn && isMain && canSummon ? 1 : 0.4);
     this._phaseBtn.setAlpha(isPlayerTurn && isMain ? 1 : 0.4);
