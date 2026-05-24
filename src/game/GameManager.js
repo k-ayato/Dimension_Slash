@@ -6,11 +6,10 @@ import { Fusion } from './Fusion.js';
 import { AI } from './AI.js';
 
 export class GameManager {
-  // 先行1T:1体 → 後攻1T:2体 → 先行2T:2体 → 以降3体
-  static calcMaxSummons(turn, currentPlayer) {
-    if (turn === 1 && currentPlayer === 'player') return 1;
-    if (turn === 1 && currentPlayer === 'ai')     return 2;
-    if (turn === 2 && currentPlayer === 'player') return 2;
+  // 先行1T:1体 → 後攻1T:2体 → 先行2T:2体 → 後攻2T:2体 → 以降3体
+  static calcMaxSummons(turn, currentPlayer, firstPlayer = 'player') {
+    if (turn === 1 && currentPlayer === firstPlayer) return 1;
+    if (turn <= 2) return 2;
     return 3;
   }
   constructor() {
@@ -21,7 +20,7 @@ export class GameManager {
     this.fusion = null;
   }
 
-  startGame() {
+  startGame(firstPlayer = 'player') {
     const field = new Field();
 
     const playerDeck = CardLoader.buildDeck();
@@ -30,7 +29,8 @@ export class GameManager {
     this.state = {
       phase: 'main',
       turn: 1,
-      currentPlayer: 'player',
+      firstPlayer,
+      currentPlayer: firstPlayer,
       player: {
         hp: 30,
         hand: [],
@@ -60,7 +60,11 @@ export class GameManager {
     this._dealInitialHand('ai');
 
     this._emit('stateChanged', this.state);
-    this._emit('phaseChanged', { phase: 'main', currentPlayer: 'player', turn: 1 });
+    this._emit('phaseChanged', { phase: 'main', currentPlayer: firstPlayer, turn: 1 });
+
+    if (firstPlayer === 'ai') {
+      this._scheduleAITurn();
+    }
   }
 
   _dealInitialHand(owner) {
@@ -95,7 +99,7 @@ export class GameManager {
 
   normalSummon(owner) {
     const ownerState = this.state[owner];
-    const maxSummons = GameManager.calcMaxSummons(this.state.turn, owner);
+    const maxSummons = GameManager.calcMaxSummons(this.state.turn, owner, this.state.firstPlayer);
     if (ownerState.normalSummonCount >= maxSummons) {
       return { ok: false, reason: `このターンの召喚上限です（${maxSummons}体）` };
     }
@@ -265,7 +269,7 @@ export class GameManager {
     const nextPlayer = owner === 'player' ? 'ai' : 'player';
     this.state.currentPlayer = nextPlayer;
     this.state.phase = 'main';
-    if (nextPlayer === 'player') this.state.turn++;
+    if (nextPlayer === this.state.firstPlayer) this.state.turn++;
 
     this.drawCard(nextPlayer, 1);
 
@@ -289,7 +293,7 @@ export class GameManager {
 
     // メインフェーズ: 行動がなくなるまで「計画→実行」を繰り返す（連続融合対応）
     for (let iter = 0; iter < 20; iter++) {
-      const maxSummons = GameManager.calcMaxSummons(this.state.turn, 'ai');
+      const maxSummons = GameManager.calcMaxSummons(this.state.turn, 'ai', this.state.firstPlayer);
       const mainActions = AI.planMainPhase(this.state, this.state.field, this.effectHandler, maxSummons);
       if (mainActions.length === 0) break;
 
@@ -374,6 +378,11 @@ export class GameManager {
       aiSummons: this.state.ai.cardsSummoned,
       turns: this.state.turn,
     };
+  }
+
+  surrender() {
+    if (this.state.player.hp <= 0 || this.state.ai.hp <= 0) return;
+    this._emit('gameOver', { winner: 'ai', stats: this._buildStats() });
   }
 
   on(event, cb) {

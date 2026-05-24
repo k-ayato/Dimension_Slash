@@ -37,7 +37,7 @@ export class ResultScene extends Phaser.Scene {
     }
 
     this._makeButton(width / 2 - 120, height / 2 + 120, 'もう一度', 0x4895ef, () => {
-      this.scene.start('GameScene');
+      this.scene.start('CoinScene');
     });
     this._makeButton(width / 2 + 120, height / 2 + 120, 'タイトルへ', 0x4cc9a4, () => {
       this.scene.start('TitleScene');

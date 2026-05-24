@@ -28,13 +28,13 @@ export class TitleScene extends Phaser.Scene {
     // ゲームスタートボタン（500×88 → 320×56）
     this._makeImgButton(W / 2, 460, 'btnStart', 320, 56, () => {
       this.cameras.main.fadeOut(200, 0, 0, 0);
-      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('GameScene'));
+      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('CoinScene'));
     });
 
     // ルール説明ボタン
     this._makeImgButton(W / 2, 540, 'btnRules', 320, 56, () => {
       this.cameras.main.fadeOut(200, 0, 0, 0);
-      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('RuleScene'));
+      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('TutorialScene'));
     });
 
     // 属性三竦み（最下部）

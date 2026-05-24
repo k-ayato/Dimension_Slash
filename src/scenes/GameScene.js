@@ -67,6 +67,10 @@ export class GameScene extends Phaser.Scene {
     this.load.image('card_omega_4d', 'assets/material/D4_green.png');
   }
 
+  init(data) {
+    this._firstPlayer = data?.firstPlayer || 'player';
+  }
+
   create() {
     this._drawBg();
     this._drawFieldLayout();
@@ -87,7 +91,7 @@ export class GameScene extends Phaser.Scene {
 
     this._gm = new GameManager();
     this._bindEvents();
-    this._gm.startGame();
+    this._gm.startGame(this._firstPlayer);
 
     // 淡いフィルター（blur + パステル調）
     this._applyCanvasFilter();
@@ -448,6 +452,125 @@ export class GameScene extends Phaser.Scene {
         wordWrap: { width: BDP_W - 14 },
       }).setOrigin(0, 0));
     }
+
+    // ── サレンダーボタン（右上端）──
+    this._makeSurrenderButton();
+  }
+
+  _makeSurrenderButton() {
+    const bw = 108, bh = 26;
+    const bx = W - bw / 2 - 8;
+    const by = bh / 2 + 7;
+
+    const btn = this.add.graphics();
+    btn.fillStyle(0xe63946, 0.15);
+    btn.lineStyle(1, 0xe63946, 0.55);
+    btn.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 5);
+    btn.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 5);
+    btn.setPosition(bx, by);
+    btn.setInteractive(
+      new Phaser.Geom.Rectangle(-bw / 2, -bh / 2, bw, bh),
+      Phaser.Geom.Rectangle.Contains
+    );
+
+    const label = this.add.text(bx, by, 'サレンダー', {
+      fontSize: '11px', fill: '#cc3344', fontFamily: 'monospace',
+    }).setOrigin(0.5);
+
+    btn.on('pointerover', () => {
+      if (this._aiLocked || this._gameOver || this._modalOpen) return;
+      btn.setAlpha(1.8);
+      this.input.setDefaultCursor('pointer');
+    });
+    btn.on('pointerout', () => {
+      btn.setAlpha(1);
+      this.input.setDefaultCursor('default');
+    });
+    btn.on('pointerdown', () => {
+      if (this._aiLocked || this._gameOver || this._modalOpen) return;
+      this._showSurrenderConfirm();
+    });
+  }
+
+  _showSurrenderConfirm() {
+    this._modalOpen = true;
+    const D = 200;
+    const elems = [];
+    const reg = (obj) => { elems.push(obj); return obj; };
+
+    const cleanup = () => {
+      elems.forEach(o => o.destroy());
+      this._modalOpen = false;
+      this.input.setDefaultCursor('default');
+    };
+
+    // 背景オーバーレイ
+    const ov = reg(this.add.graphics().setDepth(D));
+    ov.fillStyle(0x000000, 0.52);
+    ov.fillRect(0, 0, W, H);
+    ov.setInteractive(new Phaser.Geom.Rectangle(0, 0, W, H), Phaser.Geom.Rectangle.Contains);
+
+    // パネル
+    const mw = 340, mh = 148;
+    const mx = W / 2, my = H / 2;
+    const panel = reg(this.add.graphics().setDepth(D + 1));
+    panel.fillStyle(0x080810, 1);
+    panel.lineStyle(2, 0xe63946, 0.85);
+    panel.fillRoundedRect(mx - mw / 2, my - mh / 2, mw, mh, 12);
+    panel.strokeRoundedRect(mx - mw / 2, my - mh / 2, mw, mh, 12);
+
+    reg(this.add.text(mx, my - 36, '本当に降参しますか？', {
+      fontSize: '19px', fill: '#ffffff', fontFamily: 'monospace', fontStyle: 'bold',
+    }).setOrigin(0.5).setDepth(D + 2));
+
+    reg(this.add.text(mx, my - 6, 'この対戦は敗北扱いになります', {
+      fontSize: '12px', fill: '#777788', fontFamily: 'monospace',
+    }).setOrigin(0.5).setDepth(D + 2));
+
+    // ── 降参するボタン ──
+    const ybw = 130, ybh = 40;
+    const yBtn = reg(this.add.graphics().setDepth(D + 2));
+    yBtn.fillStyle(0xe63946, 0.28);
+    yBtn.lineStyle(2, 0xe63946, 0.9);
+    yBtn.fillRoundedRect(-ybw / 2, -ybh / 2, ybw, ybh, 8);
+    yBtn.strokeRoundedRect(-ybw / 2, -ybh / 2, ybw, ybh, 8);
+    yBtn.setPosition(mx - 82, my + 44);
+    yBtn.setInteractive(
+      new Phaser.Geom.Rectangle(-ybw / 2, -ybh / 2, ybw, ybh),
+      Phaser.Geom.Rectangle.Contains
+    );
+
+    const yLbl = reg(this.add.text(mx - 82, my + 44, '降参する', {
+      fontSize: '14px', fill: '#e63946', fontFamily: 'monospace', fontStyle: 'bold',
+    }).setOrigin(0.5).setDepth(D + 3));
+
+    yBtn.on('pointerover', () => { yBtn.setAlpha(1.5); this.input.setDefaultCursor('pointer'); });
+    yBtn.on('pointerout',  () => { yBtn.setAlpha(1);   this.input.setDefaultCursor('default'); });
+    yBtn.on('pointerdown', () => {
+      cleanup();
+      this._gm.surrender();
+    });
+
+    // ── キャンセルボタン ──
+    const nbw = 130, nbh = 40;
+    const nBtn = reg(this.add.graphics().setDepth(D + 2));
+    nBtn.fillStyle(0x444455, 0.28);
+    nBtn.lineStyle(2, 0x666677, 0.8);
+    nBtn.fillRoundedRect(-nbw / 2, -nbh / 2, nbw, nbh, 8);
+    nBtn.strokeRoundedRect(-nbw / 2, -nbh / 2, nbw, nbh, 8);
+    nBtn.setPosition(mx + 82, my + 44);
+    nBtn.setInteractive(
+      new Phaser.Geom.Rectangle(-nbw / 2, -nbh / 2, nbw, nbh),
+      Phaser.Geom.Rectangle.Contains
+    );
+
+    reg(this.add.text(mx + 82, my + 44, 'キャンセル', {
+      fontSize: '14px', fill: '#aaaacc', fontFamily: 'monospace',
+    }).setOrigin(0.5).setDepth(D + 3));
+
+    nBtn.on('pointerover', () => { nBtn.setAlpha(1.5); this.input.setDefaultCursor('pointer'); });
+    nBtn.on('pointerout',  () => { nBtn.setAlpha(1);   this.input.setDefaultCursor('default'); });
+    nBtn.on('pointerdown', () => cleanup());
   }
 
   _bindEvents() {
