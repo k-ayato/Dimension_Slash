@@ -284,17 +284,75 @@ export class Card extends Phaser.GameObjects.Container {
   }
 
   playDeathAnim(callback) {
-    this.scene.tweens.add({
+    const scene = this.scene;
+    const inst = this._inst;
+    const cx = this.x;
+    const cy = this.y;
+
+    const TYPE_COLS = { delta: 0xe63946, sigma: 0x4895ef, omega: 0x4cc9a4 };
+    const baseColor = TYPE_COLS[inst.type] ?? 0xbbbbbb;
+
+    // 1. 瞬間フラッシュ（白）
+    const flash = scene.add.graphics().setDepth(56);
+    flash.fillStyle(0xffffff, 0.88);
+    flash.fillCircle(0, 0, 50);
+    flash.setPosition(cx, cy);
+    scene.tweens.add({
+      targets: flash, alpha: 0, scaleX: 2.4, scaleY: 2.4,
+      duration: 300, ease: 'Power2',
+      onComplete: () => flash.destroy(),
+    });
+
+    // 2. 衝撃波リング（タイプカラー）
+    const ring = scene.add.graphics().setDepth(55);
+    ring.lineStyle(2.5, baseColor, 0.9);
+    ring.strokeCircle(0, 0, 30);
+    ring.setPosition(cx, cy);
+    scene.tweens.add({
+      targets: ring, scaleX: 3.8, scaleY: 3.8, alpha: 0,
+      duration: 400, ease: 'Power2',
+      onComplete: () => ring.destroy(),
+    });
+
+    // 3. 破片（8個）飛散
+    for (let i = 0; i < 8; i++) {
+      const angle = (Math.PI * 2 * i / 8) + (Math.random() - 0.5) * 0.45;
+      const dist = 60 + Math.random() * 55;
+      const shard = scene.add.graphics().setDepth(57);
+      const sw = 5 + Math.random() * 11;
+      const sh = 3 + Math.random() * 7;
+      shard.fillStyle(baseColor, 0.9);
+      shard.fillRect(-sw / 2, -sh / 2, sw, sh);
+      shard.setPosition(cx, cy);
+      shard.setRotation(Math.random() * Math.PI * 2);
+      scene.tweens.add({
+        targets: shard,
+        x: cx + Math.cos(angle) * dist,
+        y: cy + Math.sin(angle) * dist + 18,
+        rotation: shard.rotation + (Math.random() - 0.5) * Math.PI * 3.5,
+        alpha: 0,
+        delay: Math.random() * 50,
+        duration: 380 + Math.random() * 200,
+        ease: 'Power2',
+        onComplete: () => shard.destroy(),
+      });
+    }
+
+    // 4. カード本体: 一瞬つぶれ → 回転しながら縮小消滅
+    scene.tweens.chain({
       targets: this,
-      alpha: 0,
-      scaleX: 1.4,
-      scaleY: 1.4,
-      duration: 350,
-      ease: 'Power2',
-      onComplete: () => {
-        this.destroy();
-        if (callback) callback();
-      },
+      tweens: [
+        { scaleX: 1.1, scaleY: 0.88, duration: 55, ease: 'Power1' },
+        {
+          scaleX: 0, scaleY: 0, alpha: 0,
+          rotation: (Math.random() > 0.5 ? 1 : -1) * 0.55,
+          duration: 270, ease: 'Power3.easeIn',
+          onComplete: () => {
+            this.destroy();
+            if (callback) callback();
+          },
+        },
+      ],
     });
   }
 

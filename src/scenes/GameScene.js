@@ -80,6 +80,7 @@ export class GameScene extends Phaser.Scene {
     this._aiLocked = false;
     this._gameOver = false;
     this._modalOpen = false;
+    this._activeFieldEffectId = null;
     this._pendingDrawnIds = new Set();
     this._initTooltip();
     this.input.dragDistanceThreshold = 8;
@@ -87,30 +88,212 @@ export class GameScene extends Phaser.Scene {
     this._gm = new GameManager();
     this._bindEvents();
     this._gm.startGame();
+
+    // 淡いフィルター（blur + パステル調）
+    this._applyCanvasFilter();
+    this.events.once('shutdown', () => this._clearCanvasFilter());
+    this.events.once('destroy',  () => this._clearCanvasFilter());
   }
 
   _drawBg() {
-    this.add.image(W / 2, H / 2, 'bg').setDisplaySize(W, H);
-    // 可読性向上のための暗幕オーバーレイ
+    this._bgImage = this.add.image(W / 2, H / 2, 'bg').setDisplaySize(W, H);
+    // 暗幕オーバーレイ（淡い調整のため従来より薄く）
     const ov = this.add.graphics();
-    ov.fillStyle(0x000000, 0.42);
+    ov.fillStyle(0x000000, 0.28);
     ov.fillRect(0, 0, W, H);
+    // 薄い白オーバーレイでパステル感を加える
+    const pale = this.add.graphics();
+    pale.fillStyle(0xffffff, 0.05);
+    pale.fillRect(0, 0, W, H);
+    // D4世界変容オーバーレイ（初期は透明・depth 25でカードの上に乗る）
+    this._worldColorOverlay = this.add.graphics().setDepth(25).setAlpha(0);
+  }
+
+  _applyCanvasFilter() {
+    // blur 0.5px: 微妙なやわらかさ / brightness: 少し明るく / saturate: 淡いパステル調
+    this.sys.game.canvas.style.filter = 'blur(0.5px) brightness(1.07) saturate(0.80)';
+  }
+
+  _clearCanvasFilter() {
+    if (this.sys.game.canvas) {
+      this.sys.game.canvas.style.filter = '';
+    }
   }
 
   _drawFieldLayout() {
-    // ── 描画順: special(最下層) → enemyField → yourField(最上層) ──
-    // specialが大きくてバトルフィールドと被っても、バトルフィールドが上に描かれるので隠れない
+    // ── 描画順: special背後オーラ → special画像 → バトル画像 → special前景オーラ ──
 
-    // 1. 共有特別フィールド（最下層・540×360で大胆に大きく）
-    // specialField_transparent.png: 1536×1024(3:2) → 540×360 で原比率維持
+    // 0. スペシャルフィールド背後のオーラ（最も下層：フィールド画像より先に追加）
+    this._startSpecialFieldBgGlow();
+
+    // 1. 共有特別フィールド画像
     this._sharedSpecialImg = this.add.image(W / 2, SHARED_SPECIAL_Y, 'specialFldImg')
-      .setDisplaySize(540, 360).setAlpha(0.75);
+      .setDisplaySize(540, 360).setAlpha(0.65);
 
-    // 2. AI バトルフィールド（中層・高さ183px）
+    // 2. AI バトルフィールド
     this.add.image(W / 2, AI_BATTLE_Y,     'enemyFieldImg').setDisplaySize(726, 183);
 
-    // 3. Player バトルフィールド（最上層・高さ200px: 少し縦に引き伸ばし）
+    // 3. Player バトルフィールド
     this.add.image(W / 2, PLAYER_BATTLE_Y, 'yourFieldImg') .setDisplaySize(726, 200);
+
+    // 4. スペシャルフィールド前景オーラ（フィールド画像の上・カードの下）
+    this._startSpecialFieldFrontGlow();
+  }
+
+  _startSpecialFieldBgGlow() {
+    const cx = W / 2, cy = SHARED_SPECIAL_Y;
+
+    // 広い金色柔光（大きな円・フィールド画像の背後から滲み出す）
+    const bgGold = this.add.graphics();
+    bgGold.fillStyle(0xffd700, 1);
+    bgGold.fillCircle(cx, cy, 240);
+    bgGold.setAlpha(0.07);
+    this.tweens.add({ targets: bgGold, alpha: 0.15, yoyo: true, repeat: -1, duration: 2400, ease: 'Sine.easeInOut' });
+
+    // 白い内光（より小さく・明るく）
+    const bgWhite = this.add.graphics();
+    bgWhite.fillStyle(0xffffff, 1);
+    bgWhite.fillCircle(cx, cy, 125);
+    bgWhite.setAlpha(0.05);
+    this.tweens.add({ targets: bgWhite, alpha: 0.12, yoyo: true, repeat: -1, duration: 1700, ease: 'Sine.easeInOut', delay: 500 });
+  }
+
+  _startSpecialFieldFrontGlow() {
+    const cx = W / 2, cy = SHARED_SPECIAL_Y;
+
+    // 遅い回転レイ（16本・金色）
+    const rays1 = this.add.graphics().setPosition(cx, cy).setAlpha(0.15);
+    for (let i = 0; i < 16; i++) {
+      const a = (Math.PI * 2 * i / 16);
+      const hw = 0.11;
+      rays1.fillStyle(0xffd700, 1);
+      rays1.fillTriangle(
+        Math.cos(a - hw) * 52, Math.sin(a - hw) * 52,
+        Math.cos(a + hw) * 52, Math.sin(a + hw) * 52,
+        Math.cos(a) * 195,     Math.sin(a) * 195
+      );
+    }
+    this.tweens.add({ targets: rays1, angle: 360, duration: 32000, ease: 'Linear', repeat: -1 });
+
+    // 速い逆回転レイ（8本・白・短め）
+    const rays2 = this.add.graphics().setPosition(cx, cy).setAlpha(0.09);
+    for (let i = 0; i < 8; i++) {
+      const a = (Math.PI * 2 * i / 8) + (Math.PI / 8);
+      const hw = 0.08;
+      rays2.fillStyle(0xffffff, 1);
+      rays2.fillTriangle(
+        Math.cos(a - hw) * 65, Math.sin(a - hw) * 65,
+        Math.cos(a + hw) * 65, Math.sin(a + hw) * 65,
+        Math.cos(a) * 148,     Math.sin(a) * 148
+      );
+    }
+    this.tweens.add({ targets: rays2, angle: -360, duration: 20000, ease: 'Linear', repeat: -1 });
+  }
+
+  // D4カードが特別フィールドに着いた時の常駐オーラ
+  _startD4CardAura(cardObj, card) {
+    const cx = cardObj.x;
+    const cy = cardObj.y;
+    const typeCol = { delta: 0xe63946, sigma: 0x4895ef, omega: 0x4cc9a4 }[card.type] ?? 0xffd700;
+
+    // ── リングをカードの直下に挿入（表示順: ring2 → ring1 → cardObj）──
+    // 外リング（タイプカラー）
+    const ring2 = this.add.graphics().setPosition(cx, cy);
+    ring2.lineStyle(2.5, typeCol, 0.7);
+    ring2.strokeCircle(0, 0, 80);
+    this.children.moveTo(ring2, this.children.getIndex(cardObj));
+    this.tweens.add({ targets: ring2, alpha: 0.18, scaleX: 1.08, scaleY: 1.08,
+      yoyo: true, repeat: -1, duration: 1900, ease: 'Sine.easeInOut', delay: 600 });
+
+    // 内リング（金色）
+    const ring1 = this.add.graphics().setPosition(cx, cy);
+    ring1.lineStyle(3, 0xffd700, 0.9);
+    ring1.strokeCircle(0, 0, 62);
+    this.children.moveTo(ring1, this.children.getIndex(cardObj));
+    this.tweens.add({ targets: ring1, alpha: 0.28, scaleX: 1.10, scaleY: 1.10,
+      yoyo: true, repeat: -1, duration: 1300, ease: 'Sine.easeInOut' });
+
+    // カード・リングをまとめてゆっくり浮遊（ring と card が一緒に動く）
+    this.tweens.add({
+      targets: [cardObj, ring1, ring2], y: '-=7',
+      yoyo: true, repeat: -1, duration: 2400, ease: 'Sine.easeInOut',
+    });
+
+    // 定期ゴールドスパーク（カードの現在位置を追従）
+    const sparkTimer = this.time.addEvent({
+      delay: 780,
+      loop: true,
+      callback: () => {
+        if (!cardObj.active) { sparkTimer.destroy(); return; }
+        const angle = Math.random() * Math.PI * 2;
+        const r = 45 + Math.random() * 40;
+        const sp = this.add.graphics();
+        sp.fillStyle(0xffd700, 0.9);
+        sp.fillCircle(0, 0, 1.8 + Math.random() * 2.5);
+        sp.setPosition(cardObj.x + Math.cos(angle) * r, cardObj.y + Math.sin(angle) * r);
+        this.children.moveTo(sp, this.children.getIndex(cardObj));
+        this.tweens.add({
+          targets: sp, alpha: 0, scaleX: 0.2, scaleY: 0.2,
+          duration: 650 + Math.random() * 450, ease: 'Power2',
+          onComplete: () => sp.destroy(),
+        });
+      },
+    });
+
+    cardObj.on('destroy', () => {
+      if (ring1.active) ring1.destroy();
+      if (ring2.active) ring2.destroy();
+      sparkTimer.destroy();
+      this._scheduleWorldColorRevert();
+    });
+  }
+
+  // ────────── 世界変容カラーシステム ──────────
+
+  _applyWorldColor(effectId) {
+    this._activeFieldEffectId = effectId;
+
+    // 属性ごとの色設定
+    const OVERLAY_COL = { field_delta: 0xcc1122, field_sigma: 0x1133cc, field_omega: 0x009966 };
+    const BG_TINT     = { field_delta: 0xff9999, field_sigma: 0x99aaff, field_omega: 0x99ffdd };
+    const CAM_RGB     = { field_delta: [220,40,60], field_sigma: [40,80,220], field_omega: [20,200,160] };
+
+    const col  = OVERLAY_COL[effectId] ?? 0xffd700;
+    const tint = BG_TINT[effectId]     ?? 0xffeeaa;
+    const rgb  = CAM_RGB[effectId]     ?? [255,215,0];
+
+    // 背景画像にタイント
+    if (this._bgImage) this._bgImage.setTint(tint);
+
+    // カメラフラッシュ（属性カラー）
+    this.cameras.main.flash(700, rgb[0], rgb[1], rgb[2]);
+
+    // フルスクリーン色オーバーレイをフェードイン
+    const ov = this._worldColorOverlay;
+    this.tweens.killTweensOf(ov);
+    ov.clear();
+    ov.fillStyle(col, 1);
+    ov.fillRect(0, 0, W, H);
+    this.tweens.add({ targets: ov, alpha: 0.13, duration: 1400, ease: 'Sine.easeOut' });
+  }
+
+  _revertWorldColor() {
+    this._activeFieldEffectId = null;
+    if (this._bgImage) this._bgImage.clearTint();
+    const ov = this._worldColorOverlay;
+    this.tweens.killTweensOf(ov);
+    this.tweens.add({
+      targets: ov, alpha: 0, duration: 1200, ease: 'Sine.easeOut',
+      onComplete: () => ov.clear(),
+    });
+  }
+
+  // 新D4が発動していなければ色を戻す（新D4置き換え時の誤リバートを防ぐ）
+  _scheduleWorldColorRevert() {
+    const prevId = this._activeFieldEffectId;
+    this.time.delayedCall(350, () => {
+      if (this._activeFieldEffectId === prevId) this._revertWorldColor();
+    });
   }
 
   _initUI() {
@@ -400,9 +583,14 @@ export class GameScene extends Phaser.Scene {
     this._cardObjects[card.instanceId] = cardObj;
 
     if (isSpecial) {
-      // D4 グランドエントランス
+      // D4 グランドエントランス + 神々しいオーラ起動
       this._d4GrandEntrance(pos.x, pos.y);
-      this.time.delayedCall(180, () => { if (cardObj.active) cardObj.playD4SpawnAnim(); });
+      this.time.delayedCall(180, () => {
+        if (cardObj.active) {
+          cardObj.playD4SpawnAnim();
+          this._startD4CardAura(cardObj, card);
+        }
+      });
     } else {
       // 通常融合結果: カラーバーストリング + スポーン
       const col = { delta: 0xe63946, sigma: 0x4895ef, omega: 0x4cc9a4 }[card.type] ?? 0xffffff;
@@ -467,8 +655,10 @@ export class GameScene extends Phaser.Scene {
     // 共有特別フィールド画像を輝かせる
     if (this._sharedSpecialImg) {
       this.tweens.add({ targets: this._sharedSpecialImg, alpha: 1, duration: 300, yoyo: true, hold: 600,
-        onComplete: () => this._sharedSpecialImg.setAlpha(0.55) });
+        onComplete: () => this._sharedSpecialImg.setAlpha(0.65) });
     }
+    // 世界変容エフェクト（D4が顕現する時に世界の色が変わる）
+    this._applyWorldColor(ev.effectId);
     // フィールド効果テキストを大きく演出
     const effectColors = { field_delta: '#ff4455', field_sigma: '#4488ff', field_omega: '#44ffbb' };
     const col = effectColors[ev.effectId] || '#ffd700';
