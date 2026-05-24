@@ -1,0 +1,16 @@
+{
+  "deck": [
+    { "id": "delta_1d", "count": 4 },
+    { "id": "sigma_1d", "count": 4 },
+    { "id": "omega_1d", "count": 4 },
+    { "id": "delta_2d", "count": 3 },
+    { "id": "sigma_2d", "count": 3 },
+    { "id": "omega_2d", "count": 3 },
+    { "id": "delta_3d", "count": 2 },
+    { "id": "sigma_3d", "count": 2 },
+    { "id": "omega_3d", "count": 2 },
+    { "id": "delta_4d", "count": 1 },
+    { "id": "sigma_4d", "count": 1 },
+    { "id": "omega_4d", "count": 1 }
+  ]
+}

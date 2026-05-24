@@ -1,0 +1,147 @@
+{
+  "cards": [
+    {
+      "id": "0d",
+      "name": "0D",
+      "type": null,
+      "dimension": 0,
+      "atk": 0,
+      "def": 0,
+      "hp": 1,
+      "effect_id": null,
+      "effect_desc": null
+    },
+    {
+      "id": "delta_1d",
+      "name": "Delta 1D",
+      "type": "delta",
+      "dimension": 1,
+      "atk": 3,
+      "def": 1,
+      "hp": 3,
+      "effect_id": "delta_1d_def_ignore",
+      "effect_desc": "攻撃時、相手カードのDEFを無視する"
+    },
+    {
+      "id": "sigma_1d",
+      "name": "Sigma 1D",
+      "type": "sigma",
+      "dimension": 1,
+      "atk": 2,
+      "def": 1,
+      "hp": 2,
+      "effect_id": "sigma_1d_double_attack",
+      "effect_desc": "1ターンに2回攻撃できる"
+    },
+    {
+      "id": "omega_1d",
+      "name": "Omega 1D",
+      "type": "omega",
+      "dimension": 1,
+      "atk": 1,
+      "def": 3,
+      "hp": 4,
+      "effect_id": "omega_1d_regen",
+      "effect_desc": "ターン終了時、HP1回復"
+    },
+    {
+      "id": "delta_2d",
+      "name": "Delta 2D",
+      "type": "delta",
+      "dimension": 2,
+      "atk": 5,
+      "def": 2,
+      "hp": 5,
+      "effect_id": "delta_2d_splash",
+      "effect_desc": "相手カードを撃破した時、もう1体にATKの50%ダメージを与える"
+    },
+    {
+      "id": "sigma_2d",
+      "name": "Sigma 2D",
+      "type": "sigma",
+      "dimension": 2,
+      "atk": 4,
+      "def": 2,
+      "hp": 4,
+      "effect_id": "sigma_2d_draw_and_summon",
+      "effect_desc": "攻撃後手札を1枚ドロー。攻撃時フィールドに空きがあれば0Dを追加召喚"
+    },
+    {
+      "id": "omega_2d",
+      "name": "Omega 2D",
+      "type": "omega",
+      "dimension": 2,
+      "atk": 2,
+      "def": 5,
+      "hp": 6,
+      "effect_id": "omega_2d_pierce_block",
+      "effect_desc": "撃破される時、プレイヤーHPへの貫通ダメージを無効化"
+    },
+    {
+      "id": "delta_3d",
+      "name": "Delta 3D",
+      "type": "delta",
+      "dimension": 3,
+      "atk": 8,
+      "def": 3,
+      "hp": 7,
+      "effect_id": "delta_3d_atk_boost",
+      "effect_desc": "相手カードを撃破する度にATKが+2永続強化される"
+    },
+    {
+      "id": "sigma_3d",
+      "name": "Sigma 3D",
+      "type": "sigma",
+      "dimension": 3,
+      "atk": 6,
+      "def": 3,
+      "hp": 6,
+      "effect_id": "sigma_3d_target",
+      "effect_desc": "相手フィールドのカードを1体選んで攻撃対象を指定できる"
+    },
+    {
+      "id": "omega_3d",
+      "name": "Omega 3D",
+      "type": "omega",
+      "dimension": 3,
+      "atk": 3,
+      "def": 8,
+      "hp": 9,
+      "effect_id": "omega_3d_def_boost",
+      "effect_desc": "自分フィールド全体のカードのDEFを+2する"
+    },
+    {
+      "id": "delta_4d",
+      "name": "Delta 4D",
+      "type": "delta",
+      "dimension": 4,
+      "atk": 0,
+      "def": 0,
+      "hp": null,
+      "effect_id": "field_delta",
+      "effect_desc": "フィールド効果：次元崩壊（全カードATK+2）"
+    },
+    {
+      "id": "sigma_4d",
+      "name": "Sigma 4D",
+      "type": "sigma",
+      "dimension": 4,
+      "atk": 0,
+      "def": 0,
+      "hp": null,
+      "effect_id": "field_sigma",
+      "effect_desc": "フィールド効果：次元加速（毎ターン+1ドロー）"
+    },
+    {
+      "id": "omega_4d",
+      "name": "Omega 4D",
+      "type": "omega",
+      "dimension": 4,
+      "atk": 0,
+      "def": 0,
+      "hp": null,
+      "effect_id": "field_omega",
+      "effect_desc": "フィールド効果：次元要塞（受けるダメージ半減）"
+    }
+  ]
+}
